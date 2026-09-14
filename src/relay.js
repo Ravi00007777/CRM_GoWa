@@ -57,7 +57,7 @@ function classify(p) {
   return { kind: 'ignore' }; // reactions, polls, etc.
 }
 
-// At most one admin alert per unknown sender per day, and alert failures never fail the webhook
+// At most one admin alert per key per day, and alert failures never fail the webhook
 // (a failed webhook makes gowa retry, which would repeat the alert).
 // ponytail: in-memory, resets on restart; persist in SQLite if restarts cause repeat alerts.
 const DAY = 24 * 3600e3;
@@ -80,8 +80,8 @@ async function relay(deviceId, p) {
 
   const sender = findSender(role, p);
   if (!sender) {
-    return alertOnce(`unknown:${role}:${p.from}`,
-      `Unknown sender messaged the ${role} number. Check the chat in gowa and add them via /admin if legitimate.`);
+    // Relay numbers may also receive ordinary chats, so unknown senders are only logged, never alerted.
+    return console.log(`[relay] ignored message from unknown sender on ${role} number`);
   }
   const senderJid = isTeacher ? sender.wa_jid : sender.parent_wa_jid;
 

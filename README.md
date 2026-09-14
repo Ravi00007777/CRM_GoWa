@@ -119,7 +119,7 @@ End-to-end check: text the student number from the parent phone. The teacher pho
 | Message or caption containing `#result` (teacher) | Keyword removed, relayed as `Teacher <name> - Test result`, sets `test_result_sent_at` |
 | Contact card (or `.vcf` document) | Dropped silently and logged as `dropped` |
 | Image / video / audio / sticker / location | Dropped. The sender is asked to send text or a PDF instead. Does **not** count as notes delivered |
-| Unknown sender | Not relayed. The admin gets an alert that contains no number |
+| Unknown sender | Ignored and only logged. No reply, no admin alert (relay numbers may get ordinary chats) |
 | Sender with no class | The sender is told so and the admin is alerted |
 
 Redaction removes phone-shaped numbers (10 or more digits, even with spaces, dashes, dots or parentheses), emails, `wa.me` / WhatsApp invite links and JIDs. Just before sending, every outbound message is checked once more and refused if it contains both an email and a number/JID. Teachers and students are always paired 1:1, so each message goes to the sender's latest class.
