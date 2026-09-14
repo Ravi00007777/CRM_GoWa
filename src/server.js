@@ -12,3 +12,4 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 
 app.listen(cfg.port, () => console.log(`CRM relay listening on :${cfg.port}`));
 reminders.start();
+require('./sheets').start();

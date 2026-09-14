@@ -23,6 +23,7 @@ src/gowa.js          gowa client: send text/file scoped by X-Device-Id, media do
 src/reminders.js     notes + test-result reminders
 src/schedule.js      notes_due_at / test_result_due_at math (Sunday tests, IST)
 src/admin.js         token-guarded admin API
+src/sheets.js        Google Sheets admin panel: sheet <-> DB sync every minute
 src/db.js            schema
 test/relay.test.js   node:test suite (mocked gowa, in-memory DB)
 ```
@@ -108,6 +109,49 @@ curl -H "$T" -H "$J" -X PATCH localhost:8080/admin/classes/1 -d '{"needs_followu
 Creating a class sets `notes_due_at = held_at + NOTES_SLA_HOURS`. It also sets `test_result_due_at` to `NOTES_SLA_HOURS` after `TEST_HOUR_IST` on the first Sunday strictly after the class.
 
 End-to-end check: text the student number from the parent phone. The teacher phone should receive `Student Diya: ...` from the teacher number.
+
+## 5. Google Sheets admin panel
+
+The admin manages everything from one Google Sheet. Every minute, the app reads the sheet into its database and writes status back to it.
+
+### One-time setup
+
+1. **Create a sheet** at <https://sheets.new>. Name it, for example, "Tutoring CRM". Go to **File → Settings → Time zone** and choose **(GMT+05:30) India Standard Time**. Copy the sheet id from the URL: `docs.google.com/spreadsheets/d/`**`<THIS_PART>`**`/edit`.
+2. **Create a service account** (a robot Google account the app logs in as):
+   - Go to <https://console.cloud.google.com> and create a project, for example `tutoring-crm`.
+   - **APIs & Services → Library**: search for **Google Sheets API** and click **Enable**.
+   - **IAM & Admin → Service Accounts → Create service account**, name it `crm-sync`, and skip the role step.
+   - Open the account, go to **Keys → Add key → Create new key → JSON**, and a `.json` file downloads.
+   - Move that file to `data/google-service-account.json`. The `data/` folder is gitignored, so it never gets pushed.
+3. **Share the sheet** with the service account's email (`crm-sync@<project>.iam.gserviceaccount.com`, shown in the JSON as `client_email`) as **Editor**.
+4. **Set these in `.env`:**
+   ```
+   GOOGLE_SHEET_ID=<id from step 1>
+   GOOGLE_SERVICE_ACCOUNT_FILE=./data/google-service-account.json
+   ```
+5. Run `npm start`. On first run the app creates all the tabs below with headers and formulas.
+
+The sheet contains real phone numbers and payment emails. Share it only with admins.
+
+### Tabs
+
+| Tab | Admin types | App fills in |
+|---|---|---|
+| **Teachers** | `name`, `phone`, `payout_email` | `id`, `sync_error` |
+| **Students** | `name`, `parent_phone`, `parent_payment_email`, `grade` | `id`, `sync_error` |
+| **Classes** | `teacher_id`, `student_id`, `held_at` (`2026-09-15 17:00`, IST), `meet_link` | `id`, names, notes/result due and sent times, reminder counts, `needs_followup`, `sync_error` |
+| **Messages** | nothing | latest 2000 redacted messages: class, time, direction, relayed/flagged/dropped |
+| **Schedule** | nothing (formula) | upcoming classes with Meet link and notes/result status |
+| **FollowUp** | nothing (formula) | classes with `needs_followup = 1` |
+| **ClassDetail** | a class id in **B1** | that class's summary plus its full chat log |
+
+**How to use it:**
+- **Add a teacher:** fill in a new row in Teachers. Within a minute, `id` appears. Use that id in Classes.
+- **Schedule a class:** add a row in Classes. Its due dates appear within a minute.
+- **Edit a row:** changes are applied on the next sync. Changing `held_at` reschedules the class and moves its due dates.
+- **Errors:** a bad row gets a reason in `sync_error` (wrong phone, unknown teacher id, bad date) and is skipped until fixed.
+- **Don't** edit the app-filled columns or delete the `id` column; they're overwritten each minute. Deleting a row in the sheet doesn't delete it from the database.
+- **Don't** re-sort a tab while it's syncing. A mid-sync sort can put one minute of write-backs on the wrong rows, which the next sync corrects.
 
 ## Relay rules
 

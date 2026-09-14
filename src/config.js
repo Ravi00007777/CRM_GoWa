@@ -20,4 +20,6 @@ module.exports = {
   reminderGapHours: Number(process.env.REMINDER_GAP_HOURS) || 12,
   testHourIst: Number(process.env.TEST_HOUR_IST ?? 11),
   countryCode: process.env.DEFAULT_COUNTRY_CODE || '91',
+  sheetId: process.env.GOOGLE_SHEET_ID || '', // empty = Sheets admin panel off
+  googleKeyFile: process.env.GOOGLE_SERVICE_ACCOUNT_FILE || './data/google-service-account.json',
 };
