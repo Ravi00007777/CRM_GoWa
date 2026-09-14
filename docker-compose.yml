@@ -1,0 +1,27 @@
+services:
+  gowa:
+    # v9.x is multi-device (v8+). Pinned so an upstream API change can't silently break the relay.
+    image: aldinokemal2104/go-whatsapp-web-multidevice:v9.3.1
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - gowa_storages:/app/storages # WhatsApp sessions for both paired devices
+      - gowa_statics:/app/statics # downloaded media + QR codes
+    # ${...} values come from ./.env (same file the Express app reads)
+    command:
+      - rest
+      - --port=3000
+      - --os=Chrome
+      - --basic-auth=${GOWA_BASIC_AUTH}
+      - --webhook=http://host.docker.internal:${PORT:-8080}/webhook
+      - --webhook-secret=${WEBHOOK_SECRET}
+      - --webhook-events=message
+      - --webhook-ignore-jids=@g.us
+      - --auto-download-media=true
+
+volumes:
+  gowa_storages:
+  gowa_statics:
