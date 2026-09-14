@@ -35,7 +35,7 @@ cp .env.example .env
 
 | Var | Meaning |
 |---|---|
-| `GOWA_BASE_URL` | gowa as seen from the app: `http://localhost:3000` |
+| `GOWA_BASE_URL` | gowa as seen from the app, e.g. `http://localhost:3002` |
 | `GOWA_BASIC_AUTH` | `user:pass` protecting gowa's API. Used by compose and the app |
 | `TEACHER_DEVICE_ID` / `STUDENT_DEVICE_ID` | gowa device slot ids you create in step 3 (e.g. `teacher`, `student`) |
 | `WEBHOOK_SECRET` | HMAC key for `X-Hub-Signature-256`. Use a long random value: `openssl rand -hex 32` |
@@ -48,12 +48,20 @@ cp .env.example .env
 
 ## 2. Start gowa
 
+Choose one of these. Both use the same `.env`.
+
+**Without Docker (macOS):**
+```bash
+npm run gowa
+```
+On first run, `scripts/gowa.sh` downloads the official gowa v9.3.1 macOS build into `gowa/` and checks its checksum. It then starts gowa on the port in `GOWA_BASE_URL`, with its webhook pointed at `http://localhost:$PORT/webhook`. WhatsApp sessions are saved in `gowa/storages` (gitignored), so pairing survives restarts.
+
+**With Docker:**
 ```bash
 docker compose up -d
 docker compose logs -f gowa
 ```
-
-gowa sends webhooks to `http://host.docker.internal:$PORT/webhook`, which is the Express app running on your machine. Sessions are stored in the `gowa_storages` volume, so pairing survives restarts.
+The host port mapping in `docker-compose.yml` must match `GOWA_BASE_URL`. gowa sends webhooks to `http://host.docker.internal:$PORT/webhook`, and sessions are saved in the `gowa_storages` volume.
 
 ## 3. Pair both WhatsApp accounts
 
@@ -63,18 +71,18 @@ Do this once per number. Use the gowa basic-auth credentials from `.env`.
 AUTH=admin:change-me   # = GOWA_BASIC_AUTH
 
 # create the two device slots
-curl -u $AUTH -X POST localhost:3000/devices -H 'Content-Type: application/json' -d '{"device_id":"teacher"}'
-curl -u $AUTH -X POST localhost:3000/devices -H 'Content-Type: application/json' -d '{"device_id":"student"}'
+curl -u $AUTH -X POST localhost:3002/devices -H 'Content-Type: application/json' -d '{"device_id":"teacher"}'
+curl -u $AUTH -X POST localhost:3002/devices -H 'Content-Type: application/json' -d '{"device_id":"student"}'
 
 # get a QR code for the teacher slot
-curl -u $AUTH localhost:3000/devices/teacher/login
+curl -u $AUTH localhost:3002/devices/teacher/login
 # -> {"results":{"qr_link":"http://localhost:3000/statics/images/qrcode/scan-qr-....png","qr_duration":30}}
 ```
 
 1. Open `qr_link` in a browser. The QR code expires after about 30 seconds; call `login` again for a fresh one.
 2. On the **teacher-facing phone**, open WhatsApp → **Settings → Linked Devices → Link a device** and scan the code.
 3. Repeat with `/devices/student/login`, scanning from the **student-facing phone**.
-4. Check both slots: `curl -u $AUTH localhost:3000/devices`. Each should show `"state":"logged_in"` and its own `jid`.
+4. Check both slots: `curl -u $AUTH localhost:3002/devices`. Each should show `"state":"logged_in"` and its own `jid`.
 
 The device ids you created (`teacher`, `student`) must match `TEACHER_DEVICE_ID` / `STUDENT_DEVICE_ID`. Webhooks identify the device by its JID; the app maps JIDs back to device ids through `GET /devices`.
 

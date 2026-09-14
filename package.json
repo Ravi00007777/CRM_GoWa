@@ -5,7 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "test": "node --test",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "gowa": "sh scripts/gowa.sh"
   },
   "type": "commonjs",
   "dependencies": {
