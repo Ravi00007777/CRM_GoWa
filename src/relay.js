@@ -57,6 +57,18 @@ function classify(p) {
   return { kind: 'ignore' }; // reactions, polls, etc.
 }
 
+// At most one admin alert per unknown sender per day, and alert failures never fail the webhook
+// (a failed webhook makes gowa retry, which would repeat the alert).
+// ponytail: in-memory, resets on restart; persist in SQLite if restarts cause repeat alerts.
+const DAY = 24 * 3600e3;
+const lastAlert = new Map();
+async function alertOnce(key, text) {
+  const now = Date.now();
+  if (now - (lastAlert.get(key) || 0) < DAY) return;
+  lastAlert.set(key, now);
+  try { await gowa.alertAdmin(text); } catch (err) { console.error('[relay] admin alert failed:', err.message); }
+}
+
 async function relay(deviceId, p) {
   const role = await gowa.roleOfDevice(deviceId);
   if (!role) return console.warn('[relay] event from unknown device, ignored');
@@ -68,14 +80,15 @@ async function relay(deviceId, p) {
 
   const sender = findSender(role, p);
   if (!sender) {
-    return gowa.alertAdmin(`Unknown sender messaged the ${role} number. Check the chat in gowa and add them via /admin if legitimate.`);
+    return alertOnce(`unknown:${role}:${p.from}`,
+      `Unknown sender messaged the ${role} number. Check the chat in gowa and add them via /admin if legitimate.`);
   }
   const senderJid = isTeacher ? sender.wa_jid : sender.parent_wa_jid;
 
   const cls = (isTeacher ? q.classForTeacher : q.classForStudent).get(sender.id);
   if (!cls) {
     await gowa.sendText(ownDevice, senderJid, 'No class is scheduled for you yet. The admin has been notified.');
-    return gowa.alertAdmin(`${role} "${sender.name}" (id ${sender.id}) sent a message but has no class.`);
+    return alertOnce(`noclass:${role}:${sender.id}`, `${role} "${sender.name}" (id ${sender.id}) sent a message but has no class.`);
   }
 
   const now = new Date().toISOString();
@@ -121,7 +134,9 @@ async function handleWebhook(req, res) {
   if (!verifySignature(req.rawBody, req.get('X-Hub-Signature-256'))) return res.sendStatus(401);
 
   const { event, device_id: deviceId, payload: p } = req.body || {};
-  if (event !== 'message' || !p || p.is_from_me || String(p.chat_id || '').endsWith('@g.us')) return res.sendStatus(200);
+  // Only 1:1 chats: skip groups, status updates (status@broadcast), broadcast lists and channels (@newsletter).
+  const oneToOne = /@(s\.whatsapp\.net|lid)$/.test(String(p?.chat_id || p?.from || ''));
+  if (event !== 'message' || !p || p.is_from_me || !oneToOne) return res.sendStatus(200);
   if (p.id && q.seen.get(p.id)) return res.sendStatus(200); // gowa retry of an already-handled message
 
   try {

@@ -81,6 +81,21 @@ test('student (LID sender, phone in from_lid) -> teacher device', async () => {
   assert.equal(sent[0].body.phone, T);
 });
 
+test('unknown sender: one admin alert per sender, alert failure does not throw', async () => {
+  sent.length = 0;
+  for (const id of ['u1', 'u2', 'u3']) await relay('teacher', { id, from: '915555555555@s.whatsapp.net', body: 'hi' });
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].body.phone, '910000000000@s.whatsapp.net');
+
+  const realFetch = global.fetch;
+  global.fetch = async () => Response.json({ code: 'INVALID_JID', message: 'not on whatsapp' }, { status: 400 });
+  try {
+    await relay('teacher', { id: 'u4', from: '916666666666@s.whatsapp.net', body: 'hi' }); // must not reject
+  } finally {
+    global.fetch = realFetch;
+  }
+});
+
 test('number-only message flagged; contact card dropped; image nudges sender', async () => {
   sent.length = 0;
   await relay('teacher', { id: 'm3', from: T, body: '+91 98765 43210' });
