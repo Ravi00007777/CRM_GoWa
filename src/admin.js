@@ -31,10 +31,34 @@ const handle = (status, fn) => (req, res) => {
   try {
     res.status(status).json(fn(req.body || {}, req));
   } catch (err) {
-    const code = err.status || (String(err.code).startsWith('SQLITE_CONSTRAINT_UNIQUE') ? 409 : 400);
-    res.status(code).json({ error: err.message });
+    const unique = String(err.code).startsWith('SQLITE_CONSTRAINT_UNIQUE');
+    res.status(err.status || (unique ? 409 : 400)).json({ error: unique ? 'phone number is already used' : err.message });
   }
 };
+
+// Tags are typed by teachers/parents as #tag, so keep them short, lowercase and clear of the keywords.
+function tag(v, name) {
+  const t = String(v || String(name).split(/\s+/)[0]).toLowerCase().replace(/^#/, '');
+  if (!/^[a-z0-9_-]{1,20}$/.test(t)) fail('tag must be 1-20 letters, digits, - or _');
+  if (['result', 'list'].includes(t)) fail(`#${t} is a reserved word; pick another tag`);
+  return t;
+}
+
+// A tag must be unique among a teacher's students and among a parent's children, or #tag becomes ambiguous.
+function checkTag(s) {
+  const clash = db.prepare(`SELECT name FROM students WHERE id IS NOT ? AND tag = ?
+    AND ((? IS NOT NULL AND teacher_id = ?) OR parent_id = ?)`).get(s.id ?? null, s.tag, s.teacher_id, s.teacher_id, s.parent_id);
+  if (clash) fail(`tag #${s.tag} is already used by ${clash.name} (same teacher or same parent)`, 409);
+}
+
+const teacherId = (v) => {
+  if (v === undefined || v === null || v === '') return null;
+  if (!db.prepare('SELECT 1 FROM teachers WHERE id = ?').get(v)) fail('teacher not found', 404);
+  return Number(v);
+};
+
+router.get('/teachers', handle(200, () => db.prepare(`SELECT t.*,
+  (SELECT COUNT(*) FROM students s WHERE s.teacher_id = t.id) AS students FROM teachers t ORDER BY t.name`).all()));
 
 router.post('/teachers', handle(201, (b) => {
   required(b, 'name', 'phone');
@@ -44,36 +68,63 @@ router.post('/teachers', handle(201, (b) => {
   return { id: lastInsertRowid, ...row };
 }));
 
+const STUDENTS = `SELECT s.*, p.wa_jid AS parent_wa_jid, p.name AS parent_name, p.payment_email AS parent_payment_email,
+  t.name AS teacher FROM students s JOIN parents p ON p.id = s.parent_id LEFT JOIN teachers t ON t.id = s.teacher_id`;
+const student = (id) => db.prepare(`${STUDENTS} WHERE s.id = ?`).get(id) || fail('student not found', 404);
+
+router.get('/students', handle(200, () => db.prepare(`${STUDENTS} ORDER BY s.name`).all()));
+
+// Siblings share a parent: the parent is found by phone, or created.
 router.post('/students', handle(201, (b) => {
   required(b, 'name', 'parent_phone');
-  const row = {
-    name: b.name,
-    parent_wa_jid: toJid(b.parent_phone, cfg.countryCode),
-    parent_payment_email: email(b.parent_payment_email),
-    grade: b.grade ?? null,
-  };
-  const { lastInsertRowid } = db.prepare(`INSERT INTO students (name, parent_wa_jid, parent_payment_email, grade)
-    VALUES (@name, @parent_wa_jid, @parent_payment_email, @grade)`).run(row);
-  return { id: lastInsertRowid, ...row };
+  const jid = toJid(b.parent_phone, cfg.countryCode);
+  return db.transaction(() => {
+    let parent = db.prepare('SELECT id FROM parents WHERE wa_jid = ?').get(jid);
+    if (!parent) {
+      parent = { id: db.prepare('INSERT INTO parents (name, wa_jid, payment_email) VALUES (?, ?, ?)')
+        .run(b.parent_name || null, jid, email(b.parent_payment_email || null)).lastInsertRowid };
+    }
+    const s = { name: b.name, tag: tag(b.tag, b.name), parent_id: parent.id, teacher_id: teacherId(b.teacher_id), grade: b.grade ?? null };
+    checkTag(s);
+    const { lastInsertRowid } = db.prepare(`INSERT INTO students (name, tag, parent_id, teacher_id, grade)
+      VALUES (@name, @tag, @parent_id, @teacher_id, @grade)`).run(s);
+    return student(lastInsertRowid);
+  })();
 }));
 
+// Assign/switch teacher (teacher_id), end the assignment (teacher_id: null), or edit tag/grade.
+// Old classes and messages keep their teacher_id, so history survives a switch.
+router.patch('/students/:id', handle(200, (b, req) => {
+  const s = { ...student(req.params.id) };
+  if ('teacher_id' in b) s.teacher_id = teacherId(b.teacher_id);
+  if ('tag' in b) s.tag = tag(b.tag, s.name);
+  if ('grade' in b) s.grade = b.grade || null;
+  checkTag(s);
+  db.prepare('UPDATE students SET teacher_id = @teacher_id, tag = @tag, grade = @grade WHERE id = @id').run(s);
+  return student(s.id);
+}));
+
+router.get('/students/:id/messages', handle(200, (_b, req) => db.prepare(`SELECT m.*, t.name AS teacher
+  FROM messages m JOIN teachers t ON t.id = m.teacher_id WHERE m.student_id = ? ORDER BY m.sent_at`).all(req.params.id)));
+
+// A class is always with the student's current teacher.
 router.post('/classes', handle(201, (b) => {
-  required(b, 'teacher_id', 'student_id', 'held_at');
-  const row = {
-    teacher_id: b.teacher_id,
-    student_id: b.student_id,
-    meet_link: b.meet_link ?? null,
-    ...dueDates(b.held_at, cfg.notesSlaHours, cfg.testHourIst),
-  };
+  required(b, 'student_id', 'held_at');
+  const s = student(b.student_id);
+  if (!s.teacher_id) fail(`${s.name} has no teacher assigned`);
+  const row = { teacher_id: s.teacher_id, student_id: s.id, meet_link: b.meet_link || null,
+    ...dueDates(b.held_at, cfg.notesSlaHours, cfg.testHourIst) };
   const { lastInsertRowid } = db.prepare(`
     INSERT INTO classes (teacher_id, student_id, held_at, meet_link, notes_due_at, test_result_due_at)
     VALUES (@teacher_id, @student_id, @held_at, @meet_link, @notes_due_at, @test_result_due_at)`).run(row);
   return db.prepare('SELECT * FROM classes WHERE id = ?').get(lastInsertRowid);
 }));
 
+const CLASSES = `SELECT c.*, t.name AS teacher, s.name AS student, s.tag FROM classes c
+  JOIN teachers t ON t.id = c.teacher_id JOIN students s ON s.id = c.student_id`;
 router.get('/classes', handle(200, (_b, req) => req.query.needs_followup === '1'
-  ? db.prepare('SELECT * FROM classes WHERE needs_followup = 1 ORDER BY held_at DESC').all()
-  : db.prepare('SELECT * FROM classes ORDER BY held_at DESC LIMIT 200').all()));
+  ? db.prepare(`${CLASSES} WHERE c.needs_followup = 1 ORDER BY c.held_at DESC`).all()
+  : db.prepare(`${CLASSES} ORDER BY c.held_at DESC LIMIT 200`).all()));
 
 const PATCHABLE = ['notes_sent_at', 'test_result_sent_at', 'needs_followup', 'meet_link'];
 router.patch('/classes/:id', handle(200, (b, req) => {

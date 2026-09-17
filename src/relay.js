@@ -12,25 +12,27 @@ function verifySignature(rawBody, header, secret = cfg.webhookSecret) {
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
+const PAIR = `SELECT s.id AS student_id, s.name AS student, s.tag, t.id AS teacher_id, t.name AS teacher,
+  p.wa_jid AS parent_jid, t.wa_jid AS teacher_jid
+  FROM students s JOIN parents p ON p.id = s.parent_id JOIN teachers t ON t.id = s.teacher_id`;
 const q = {
   teacherByJid: db.prepare('SELECT * FROM teachers WHERE wa_jid = ?'),
-  studentByJid: db.prepare('SELECT * FROM students WHERE parent_wa_jid = ?'),
-  // Teacher<->student is always 1:1, so the latest class identifies the other party.
-  classForTeacher: db.prepare(`
-    SELECT c.*, s.parent_wa_jid AS other_jid FROM classes c JOIN students s ON s.id = c.student_id
-    WHERE c.teacher_id = ? ORDER BY c.held_at DESC, c.id DESC LIMIT 1`),
-  classForStudent: db.prepare(`
-    SELECT c.*, t.wa_jid AS other_jid FROM classes c JOIN teachers t ON t.id = c.teacher_id
-    WHERE c.student_id = ? ORDER BY c.held_at DESC, c.id DESC LIMIT 1`),
+  parentByJid: db.prepare('SELECT * FROM parents WHERE wa_jid = ?'),
+  studentsOfTeacher: db.prepare(`${PAIR} WHERE s.teacher_id = ? ORDER BY s.tag`),
+  childrenOfParent: db.prepare(`${PAIR} WHERE s.parent_id = ? ORDER BY s.tag`),
+  byMessageId: db.prepare('SELECT teacher_id, student_id FROM messages WHERE wa_message_id = ? OR out_message_id = ? LIMIT 1'),
+  // Notes/results belong to the latest class that has already started.
+  classForPair: db.prepare(`SELECT id FROM classes WHERE teacher_id = ? AND student_id = ? AND held_at <= ?
+    ORDER BY held_at DESC, id DESC LIMIT 1`),
   seen: db.prepare('SELECT 1 FROM messages WHERE wa_message_id = ?'),
-  log: db.prepare(`INSERT OR IGNORE INTO messages (class_id, direction, wa_message_id, content, status, sent_at)
-                   VALUES (?, ?, ?, ?, ?, ?)`),
+  log: db.prepare(`INSERT OR IGNORE INTO messages
+    (teacher_id, student_id, class_id, direction, wa_message_id, out_message_id, content, status, sent_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
   notesSent: db.prepare('UPDATE classes SET notes_sent_at = ? WHERE id = ? AND notes_sent_at IS NULL'),
   resultSent: db.prepare('UPDATE classes SET test_result_sent_at = ? WHERE id = ? AND test_result_sent_at IS NULL'),
 };
 
-function findSender(role, p) {
-  const lookup = role === 'teacher' ? q.teacherByJid : q.studentByJid;
+function findSender(lookup, p) {
   for (const v of [p.from, p.from_lid]) {
     if (!v) continue;
     const tries = [String(v)];
@@ -57,6 +59,25 @@ function classify(p) {
   return { kind: 'ignore' }; // reactions, polls, etc.
 }
 
+// Which conversation a message belongs to. Never guesses: a leading #tag wins, then a swipe-reply to an
+// earlier relayed message, then the only assigned student; otherwise the sender is asked and nothing is sent.
+const TAG = /^\s*#([\w-]+)\s*/;
+function route(pairs, body, repliedTo, noun) {
+  const tags = pairs.map((x) => `#${x.tag}`).join(' or ');
+  const m = body.match(TAG);
+  if (m) {
+    const pair = pairs.find((x) => x.tag === m[1].toLowerCase());
+    return pair ? { pair, body: body.slice(m[0].length) } : { refuse: `No ${noun} has the tag #${m[1]}. Use ${tags}.` };
+  }
+  const prev = repliedTo && q.byMessageId.get(repliedTo, repliedTo);
+  if (prev) {
+    const pair = pairs.find((x) => x.teacher_id === prev.teacher_id && x.student_id === prev.student_id);
+    return pair ? { pair, body } : { refuse: 'That conversation has ended, so your message was not sent.' };
+  }
+  if (pairs.length === 1) return { pair: pairs[0], body };
+  return { refuse: `Which ${noun}? Start your message with ${tags}.` };
+}
+
 // At most one admin alert per key per day, and alert failures never fail the webhook
 // (a failed webhook makes gowa retry, which would repeat the alert).
 // ponytail: in-memory, resets on restart; persist in SQLite if restarts cause repeat alerts.
@@ -77,55 +98,75 @@ async function relay(deviceId, p) {
   const ownDevice = isTeacher ? cfg.teacherDevice : cfg.studentDevice;
   const otherDevice = isTeacher ? cfg.studentDevice : cfg.teacherDevice;
   const direction = isTeacher ? 'teacher_to_student' : 'student_to_teacher';
+  const noun = isTeacher ? 'student' : 'child';
 
-  const sender = findSender(role, p);
+  const sender = findSender(isTeacher ? q.teacherByJid : q.parentByJid, p);
   if (!sender) {
     // Relay numbers may also receive ordinary chats, so unknown senders are only logged, never alerted.
     return console.log(`[relay] ignored message from unknown sender on ${role} number`);
   }
-  const senderJid = isTeacher ? sender.wa_jid : sender.parent_wa_jid;
+  const reply = (text) => gowa.sendText(ownDevice, sender.wa_jid, text);
+  const pairs = (isTeacher ? q.studentsOfTeacher : q.childrenOfParent).all(sender.id);
 
-  const cls = (isTeacher ? q.classForTeacher : q.classForStudent).get(sender.id);
-  if (!cls) {
-    await gowa.sendText(ownDevice, senderJid, 'No class is scheduled for you yet. The admin has been notified.');
-    return alertOnce(`noclass:${role}:${sender.id}`, `${role} "${sender.name}" (id ${sender.id}) sent a message but has no class.`);
+  const m = classify(p);
+  if (m.kind === 'ignore') return;
+  let body = m.kind === 'text' ? m.text : m.caption || '';
+
+  if (/^\s*#list\s*$/i.test(body)) {
+    return reply(pairs.length
+      ? `Your ${noun === 'child' ? 'children' : 'students'}:\n` +
+        pairs.map((x) => `#${x.tag} ${x.student}${isTeacher ? '' : ` (teacher ${x.teacher})`}`).join('\n')
+      : `No ${noun} is assigned to you.`);
+  }
+  if (!pairs.length) {
+    await reply(`No ${noun} is assigned to you yet. The admin has been notified.`);
+    return alertOnce(`unassigned:${role}:${sender.id}`,
+      `${isTeacher ? 'Teacher' : 'Parent'} "${sender.name || sender.wa_jid}" (id ${sender.id}) sent a message but has no ${noun} assigned.`);
   }
 
-  const now = new Date().toISOString();
-  const log = (content, status) => q.log.run(cls.id, direction, p.id || null, content, status, now);
-  const m = classify(p);
+  const isResult = isTeacher && /#result\b/i.test(body);
+  if (isResult) body = body.replace(/#result\b/gi, '').trim();
+  const r = route(pairs, body, p.replied_to_id, noun);
 
-  if (m.kind === 'ignore') return;
+  const now = new Date().toISOString();
+  const cls = r.pair && q.classForPair.get(r.pair.teacher_id, r.pair.student_id, now);
+  const log = (content, status, outId = null) => r.pair && q.log.run(r.pair.teacher_id, r.pair.student_id,
+    cls?.id ?? null, direction, p.id || null, outId, content, status, now);
+
   if (m.kind === 'contact') return log('[contact card dropped]', 'dropped');
   if (m.kind === 'unsupported') {
     log('[media dropped: only text and documents are relayed]', 'dropped');
-    return gowa.sendText(ownDevice, senderJid, isTeacher
+    return reply(isTeacher
       ? 'Images, audio, video and locations are not relayed. Please send notes as a PDF/document.'
       : 'Images, audio, video and locations are not relayed. Please send text or a PDF/document.');
   }
+  if (r.refuse) return reply(r.refuse);
 
-  let body = m.kind === 'text' ? m.text : m.caption;
-  const isResult = isTeacher && /#result\b/i.test(body);
-  if (isResult) body = body.replace(/#result\b/gi, '').trim();
-
-  const { text, flagged } = redact(body);
+  const { pair } = r;
+  const { text, flagged } = redact(r.body);
   if (flagged) return log(text, 'flagged');
 
-  const label = `${isTeacher ? 'Teacher' : 'Student'} ${sender.name}${isResult ? ' - Test result' : ''}`;
+  const label = isTeacher
+    ? `Teacher ${pair.teacher} (for ${pair.student})${isResult ? ' - Test result' : ''}`
+    : `Student ${pair.student} (#${pair.tag})`;
   const out = text.trim() ? `${label}:\n${text}` : label;
+  const to = isTeacher ? pair.parent_jid : pair.teacher_jid;
 
+  let sent;
   if (m.kind === 'document') {
     if (!m.path) {
       log('[document not downloaded by gowa]', 'dropped');
-      return gowa.alertAdmin(`Class #${cls.id}: a document could not be relayed (gowa auto-download-media is off?).`);
+      return alertOnce(`nodoc:${pair.teacher_id}:${pair.student_id}`,
+        `${pair.teacher} / ${pair.student}: a document could not be relayed (gowa auto-download-media is off?).`);
     }
     const file = await gowa.fetchMedia(m.path);
-    await gowa.sendFile(otherDevice, cls.other_jid, file, `class-${cls.id}${m.ext}`, out);
+    sent = await gowa.sendFile(otherDevice, to, file, `${cls ? `class-${cls.id}` : pair.tag}${m.ext}`, out);
   } else {
-    await gowa.sendText(otherDevice, cls.other_jid, out);
+    sent = await gowa.sendText(otherDevice, to, out);
   }
 
-  log(text, 'relayed');
+  log(text, 'relayed', sent?.message_id || null);
+  if (!cls) return;
   if (isResult) q.resultSent.run(now, cls.id);
   else if (isTeacher && m.kind === 'document') q.notesSent.run(now, cls.id);
 }

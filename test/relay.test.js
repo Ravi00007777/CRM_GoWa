@@ -23,13 +23,14 @@ global.fetch = async (url, opts = {}) => {
   if (url.includes('/statics/media/')) return new Response('PDFDATA');
   const body = opts.body instanceof FormData ? Object.fromEntries(opts.body) : JSON.parse(opts.body);
   sent.push({ url, device: opts.headers['X-Device-Id'], body });
-  return Response.json({ code: 'SUCCESS', results: { message_id: 'out1' } });
+  return Response.json({ code: 'SUCCESS', results: { message_id: `out${sent.length}` } });
 };
 
 const T = '919876543210@s.whatsapp.net';
 const S = '918765432109@s.whatsapp.net';
 db.prepare("INSERT INTO teachers (id, name, wa_jid, payout_email) VALUES (1, 'Asha', ?, 'asha@pay.in')").run(T);
-db.prepare("INSERT INTO students (id, name, parent_wa_jid, parent_payment_email) VALUES (1, 'Diya', ?, 'p@pay.in')").run(S);
+db.prepare("INSERT INTO parents (id, name, wa_jid, payment_email) VALUES (1, 'Mrs Sharma', ?, 'p@pay.in')").run(S);
+db.prepare("INSERT INTO students (id, name, tag, parent_id, teacher_id) VALUES (1, 'Diya', 'diya', 1, 1)").run();
 db.prepare(`INSERT INTO classes (id, teacher_id, student_id, held_at, notes_due_at, test_result_due_at)
   VALUES (1, 1, 1, '2026-09-14T11:00:00.000Z', '2026-09-15T11:00:00.000Z', '2026-09-21T05:30:00.000Z')`).run();
 
@@ -69,7 +70,7 @@ test('teacher text -> redacted, sent via STUDENT device to parent', async () => 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].device, 'student');
   assert.equal(sent[0].body.phone, S);
-  assert.equal(sent[0].body.message, 'Teacher Asha:\nmy number [number removed], email me [email removed]');
+  assert.equal(sent[0].body.message, 'Teacher Asha (for Diya):\nmy number [number removed], email me [email removed]');
   assert.equal(db.prepare("SELECT content FROM messages WHERE wa_message_id='m1'").get().content,
     'my number [number removed], email me [email removed]');
 });
@@ -116,6 +117,55 @@ test('reminders: 1st at due, 2nd after gap + admin alert + followup; document ma
   assert.ok(db.prepare('SELECT notes_sent_at FROM classes WHERE id = 1').get().notes_sent_at);
 
   await relay('teacher', { id: 'm7', from: T, body: '#result 42/50, great work' });
-  assert.equal(sent[1].body.message, 'Teacher Asha - Test result:\n42/50, great work');
+  assert.equal(sent[1].body.message, 'Teacher Asha (for Diya) - Test result:\n42/50, great work');
   assert.ok(db.prepare('SELECT test_result_sent_at FROM classes WHERE id = 1').get().test_result_sent_at);
+});
+
+test('multi-student teacher + sibling parent: #tag, swipe-reply, ask when unclear, ended assignment', async () => {
+  const S2 = '917777777777@s.whatsapp.net';
+  const R = '913333333333@s.whatsapp.net';
+  db.prepare("INSERT INTO teachers (id, name, wa_jid) VALUES (2, 'Ravi', ?)").run(R);
+  db.prepare("INSERT INTO parents (id, wa_jid) VALUES (2, ?)").run(S2);
+  db.prepare("INSERT INTO students (id, name, tag, parent_id, teacher_id) VALUES (2, 'Rohan', 'rohan', 2, 1)").run(); // Asha's 2nd student
+  db.prepare("INSERT INTO students (id, name, tag, parent_id, teacher_id) VALUES (3, 'Kabir', 'kabir', 1, 2)").run(); // Diya's brother, Ravi
+  const msg = () => sent.at(-1).body;
+
+  // Teacher with 2 students, no tag, no reply -> asked, nothing relayed
+  sent.length = 0;
+  await relay('teacher', { id: 'r1', from: T, body: 'homework done?' });
+  assert.equal(sent.length, 1);
+  assert.equal(msg().phone, T);
+  assert.equal(msg().message, 'Which student? Start your message with #diya or #rohan.');
+
+  // #tag routes and is stripped
+  await relay('teacher', { id: 'r2', from: T, body: '#Rohan homework done?' });
+  assert.deepEqual([sent.at(-1).device, msg().phone, msg().message], ['student', S2, 'Teacher Asha (for Rohan):\nhomework done?']);
+  const outId = db.prepare("SELECT out_message_id FROM messages WHERE wa_message_id = 'r2'").get().out_message_id;
+  assert.ok(outId);
+
+  // Rohan's parent swipe-replies (only one child, but reply path also works); teacher swipe-replies to the relayed copy
+  await relay('student', { id: 'r3', from: S2, body: 'yes', replied_to_id: 'r2' });
+  assert.deepEqual([msg().phone, msg().message], [T, 'Student Rohan (#rohan):\nyes']);
+  const toTeacher = db.prepare("SELECT out_message_id FROM messages WHERE wa_message_id = 'r3'").get().out_message_id;
+  await relay('teacher', { id: 'r4', from: T, body: 'great', replied_to_id: toTeacher });
+  assert.equal(msg().phone, S2);
+
+  // Unknown tag refused; #list answers
+  await relay('teacher', { id: 'r5', from: T, body: '#kabir hi' });
+  assert.equal(msg().message, 'No student has the tag #kabir. Use #diya or #rohan.');
+  await relay('teacher', { id: 'r6', from: T, body: '#list' });
+  assert.equal(msg().message, 'Your students:\n#diya Diya\n#rohan Rohan');
+
+  // Parent with 2 children (different teachers)
+  await relay('student', { id: 'r7', from: S, body: 'test done' });
+  assert.equal(msg().message, 'Which child? Start your message with #diya or #kabir.');
+  await relay('student', { id: 'r8', from: S, body: '#kabir test done' });
+  assert.deepEqual([sent.at(-1).device, msg().phone, msg().message], ['teacher', R, 'Student Kabir (#kabir):\ntest done']);
+
+  // Assignment ended: reply to old conversation refused, not rerouted to the remaining student
+  db.prepare('UPDATE students SET teacher_id = NULL WHERE id = 2').run();
+  const before = sent.length;
+  await relay('teacher', { id: 'r9', from: T, body: 'one more thing', replied_to_id: 'r2' });
+  assert.equal(sent.length, before + 1);
+  assert.deepEqual([msg().phone, msg().message], [T, 'That conversation has ended, so your message was not sent.']);
 });
