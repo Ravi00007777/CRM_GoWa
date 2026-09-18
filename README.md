@@ -120,9 +120,11 @@ Open <http://localhost:8080> while `npm start` runs and sign in with `ADMIN_TOKE
 
 ## 6. Deploy to a VPS
 
-Ubuntu 24.04, 2 GB RAM is enough. gowa runs under `docker compose` (which already restarts it);
-only the Express app gets a systemd unit. Caddy terminates TLS, because the admin token travels
-in an `Authorization` header and must not cross the internet in the clear.
+Ubuntu 24.04. It fits a 1 GB free-tier VM (Google Cloud e2-micro, Oracle Always Free), so gowa
+runs as a native binary under systemd rather than under Docker — the daemon costs more memory
+than the relay itself. `docker-compose.yml` is still there if you prefer containers on a larger
+box. Caddy terminates TLS, because the admin token travels in an `Authorization` header and must
+not cross the internet in the clear.
 
 ```bash
 ssh root@<your-vps>
@@ -131,8 +133,9 @@ cp /opt/almaed/.env.example /opt/almaed/.env   # fill it in, new secrets, not th
 sh /opt/almaed/scripts/deploy/setup.sh
 ```
 
-`setup.sh` installs Node, Docker, Caddy and sqlite3, creates the `almaed` service user, opens only
-22/80/443 in `ufw`, enables the app unit, starts gowa and adds a nightly backup. It then prints the
+`setup.sh` installs Node 22 (Ubuntu's 18 is too old for better-sqlite3), Caddy and sqlite3, adds a
+1 GB swapfile, creates the `almaed` service user, opens only 22/80/443 in `ufw`, enables both
+units and adds a nightly backup. It then prints the
 two steps it cannot do for you: putting your domain in `/etc/caddy/Caddyfile`, and pairing both
 WhatsApp numbers again by QR. **Sessions do not transfer** — the pairing in `gowa/storages` on your
 laptop belongs to that install.
@@ -141,11 +144,13 @@ laptop belongs to that install.
 |---|---|
 | `scripts/deploy/setup.sh` | the one-shot installer above |
 | `scripts/deploy/almaed.service` | systemd unit for `src/server.js` |
+| `scripts/deploy/gowa.service` | systemd unit for gowa (native binary, no Docker) |
 | `scripts/deploy/Caddyfile` | HTTPS reverse proxy; has an IP-only fallback if you have no domain |
 | `scripts/deploy/backup.sh` | nightly `sqlite3 .backup`, 14 kept (a plain `cp` can catch WAL mid-write) |
 
-Neither gowa (3002) nor the app (8080) is exposed; both listen on loopback and Caddy is the only
-way in. If you skip Caddy, do not open 8080 to the internet.
+Only 22, 80 and 443 are open. gowa (3002) and the app (8080) are reachable from the machine
+itself, so Caddy is the only way in from outside. To reach gowa for pairing, tunnel it:
+`ssh -L 3002:localhost:3002 <user>@<host>`.
 
 ## Who a message goes to
 

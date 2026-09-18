@@ -9,13 +9,20 @@ APP=/opt/almaed
 
 echo "--- packages"
 apt-get update -qq
-apt-get install -y -qq sqlite3 ufw ca-certificates curl gnupg
+apt-get install -y -qq sqlite3 ufw ca-certificates curl gnupg unzip
 # Ubuntu 24.04 ships Node 18; better-sqlite3 needs >= 22, so take it from NodeSource.
 [ "$(node -v 2>/dev/null | cut -c2- | cut -d. -f1)" -ge 22 ] 2>/dev/null || {
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
   apt-get install -y -qq nodejs
 }
-command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
+
+# No Docker: on a 1 GB VM the daemon costs more memory than the relay itself, so gowa runs
+# as a native binary under its own unit instead.
+echo "--- swap (1 GB VMs have no headroom for an npm install)"
+[ -f /swapfile ] || {
+  fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile && swapon /swapfile
+  grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
+}
 command -v caddy >/dev/null || {
   apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
   curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
@@ -27,26 +34,26 @@ command -v caddy >/dev/null || {
 
 echo "--- user"
 id almaed >/dev/null 2>&1 || useradd --system --home "$APP" --shell /usr/sbin/nologin almaed
-usermod -aG docker almaed
-mkdir -p "$APP/data" "$APP/backups"
+mkdir -p "$APP/data" "$APP/backups" "$APP/gowa"
 chown -R almaed:almaed "$APP"
 
 echo "--- app"
 cd "$APP"
 sudo -u almaed npm ci --omit=dev
 
-echo "--- firewall: ssh and https only. gowa (3002) and the app (8080) stay on loopback."
+# gowa's native binary binds all interfaces, so the firewall is what keeps 3002 private.
+echo "--- firewall: ssh and https only. gowa (3002) and the app (8080) are not reachable from outside."
 ufw allow 22/tcp >/dev/null
 ufw allow 80,443/tcp >/dev/null
 ufw --force enable >/dev/null
 
 echo "--- services"
 install -m 644 "$APP/scripts/deploy/almaed.service" /etc/systemd/system/almaed.service
+install -m 644 "$APP/scripts/deploy/gowa.service" /etc/systemd/system/gowa.service
 [ -f /etc/caddy/Caddyfile.orig ] || cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.orig 2>/dev/null || true
 echo "NOTE: edit /etc/caddy/Caddyfile with your domain (template: $APP/scripts/deploy/Caddyfile)"
 systemctl daemon-reload
-systemctl enable --now almaed
-sudo -u almaed docker compose -f "$APP/docker-compose.yml" up -d
+systemctl enable --now gowa almaed
 
 echo "--- nightly backup"
 echo "0 2 * * * $APP/scripts/deploy/backup.sh" | crontab -u almaed -
@@ -62,5 +69,5 @@ Done. Remaining, by hand:
        curl -u $AUTH -X POST localhost:3002/devices -H 'Content-Type: application/json' -d '{"device_id":"student"}'
        curl -u $AUTH localhost:3002/devices/student/login     # scan from the student phone
        curl -u $AUTH localhost:3002/devices                   # both should say "logged_in"
-  3. Check: systemctl status almaed && journalctl -u almaed -f
+  3. Check: systemctl status gowa almaed && journalctl -u almaed -u gowa -f
 DONE
