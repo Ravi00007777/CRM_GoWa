@@ -1,4 +1,4 @@
-# WhatsApp Relay CRM
+# AlmaEd
 
 A WhatsApp relay backend for a tutoring brokerage. Teachers message one WhatsApp number and parents/students message another. Every message goes through this app, which removes contact info and forwards it from the other number, so neither side ever sees the other's real number.
 
@@ -117,6 +117,35 @@ Open <http://localhost:8080> while `npm start` runs and sign in with `ADMIN_TOKE
 - **Teachers**: add teachers.
 - **Students**: add a student with a parent number, a tag (defaults to first name) and a teacher. Siblings use the same parent number. Change the teacher dropdown to switch teachers, or set it to *Not assigned* to end the assignment; old messages stay visible under *Messages*.
 - **Classes**: schedule a class for an assigned student; see notes/result status and follow-ups.
+
+## 6. Deploy to a VPS
+
+Ubuntu 24.04, 2 GB RAM is enough. gowa runs under `docker compose` (which already restarts it);
+only the Express app gets a systemd unit. Caddy terminates TLS, because the admin token travels
+in an `Authorization` header and must not cross the internet in the clear.
+
+```bash
+ssh root@<your-vps>
+git clone <this repo> /opt/almaed
+cp /opt/almaed/.env.example /opt/almaed/.env   # fill it in, new secrets, not the laptop ones
+sh /opt/almaed/scripts/deploy/setup.sh
+```
+
+`setup.sh` installs Node, Docker, Caddy and sqlite3, creates the `almaed` service user, opens only
+22/80/443 in `ufw`, enables the app unit, starts gowa and adds a nightly backup. It then prints the
+two steps it cannot do for you: putting your domain in `/etc/caddy/Caddyfile`, and pairing both
+WhatsApp numbers again by QR. **Sessions do not transfer** — the pairing in `gowa/storages` on your
+laptop belongs to that install.
+
+| File | What it is |
+|---|---|
+| `scripts/deploy/setup.sh` | the one-shot installer above |
+| `scripts/deploy/almaed.service` | systemd unit for `src/server.js` |
+| `scripts/deploy/Caddyfile` | HTTPS reverse proxy; has an IP-only fallback if you have no domain |
+| `scripts/deploy/backup.sh` | nightly `sqlite3 .backup`, 14 kept (a plain `cp` can catch WAL mid-write) |
+
+Neither gowa (3002) nor the app (8080) is exposed; both listen on loopback and Caddy is the only
+way in. If you skip Caddy, do not open 8080 to the internet.
 
 ## Who a message goes to
 

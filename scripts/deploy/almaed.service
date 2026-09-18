@@ -1,0 +1,25 @@
+# /etc/systemd/system/almaed.service - the Express app. gowa runs under docker compose
+# (restart: unless-stopped), so only this needs a unit.
+[Unit]
+Description=AlmaEd relay CRM
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=almaed
+WorkingDirectory=/opt/almaed
+ExecStart=/usr/bin/node src/server.js
+Restart=always
+RestartSec=5
+# The app reads .env itself; systemd only needs to not clobber it.
+Environment=NODE_ENV=production
+
+# The SQLite file and gowa sessions are the only state worth protecting.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/opt/almaed/data
+
+[Install]
+WantedBy=multi-user.target
