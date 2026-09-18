@@ -6,7 +6,7 @@ const gowa = require('./gowa');
 const H = 3600e3;
 const KINDS = [
   { due: 'notes_due_at', sent: 'notes_sent_at', count: 'reminder_count',
-    what: 'Class notes', how: (tag) => `Please send them here as a PDF/document with #${tag} in the caption.` },
+    what: 'Class notes', how: (tag) => `Please send them here as a PDF/document, with the caption starting with #${tag}.` },
   { due: 'test_result_due_at', sent: 'test_result_sent_at', count: 'test_reminder_count',
     what: 'Sunday test result', how: (tag) => `Please send it here starting with #${tag} #result.` },
 ].map((k) => ({

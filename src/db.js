@@ -43,6 +43,8 @@ CREATE TABLE IF NOT EXISTS students (
   UNIQUE (parent_id, tag)
 );
 CREATE INDEX IF NOT EXISTS students_teacher ON students(teacher_id);
+-- route() resolves a teacher's #tag by tag alone, so a duplicate would silently misroute to the wrong parent.
+CREATE UNIQUE INDEX IF NOT EXISTS students_teacher_tag ON students(teacher_id, tag) WHERE teacher_id IS NOT NULL;
 CREATE TABLE IF NOT EXISTS classes (
   id INTEGER PRIMARY KEY,
   teacher_id INTEGER NOT NULL REFERENCES teachers(id),

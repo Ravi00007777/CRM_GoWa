@@ -66,8 +66,13 @@ function route(pairs, body, repliedTo, noun) {
   const tags = pairs.map((x) => `#${x.tag}`).join(' or ');
   const m = body.match(TAG);
   if (m) {
-    const pair = pairs.find((x) => x.tag === m[1].toLowerCase());
-    return pair ? { pair, body: body.slice(m[0].length) } : { refuse: `No ${noun} has the tag #${m[1]}. Use ${tags}.` };
+    // filter, not find: the unique index should make duplicates impossible, but a duplicate that slips in
+    // must refuse rather than pick one at random and deliver to the wrong parent.
+    const hits = pairs.filter((x) => x.tag === m[1].toLowerCase());
+    if (hits.length === 1) return { pair: hits[0], body: body.slice(m[0].length) };
+    return { refuse: hits.length
+      ? `More than one ${noun} has the tag #${m[1]}, so your message was not sent. Please tell the admin.`
+      : `No ${noun} has the tag #${m[1]}. Use ${tags}.` };
   }
   const prev = repliedTo && q.byMessageId.get(repliedTo, repliedTo);
   if (prev) {
@@ -133,7 +138,12 @@ async function relay(deviceId, p) {
   const log = (content, status, outId = null) => r.pair && q.log.run(r.pair.teacher_id, r.pair.student_id,
     cls?.id ?? null, direction, p.id || null, outId, content, status, now);
 
-  if (m.kind === 'contact') return log('[contact card dropped]', 'dropped');
+  // Media is never relayed whatever it routes to, so the sender is always told - including when routing
+  // failed, where there is no pair to log against and silence would look like a successful send.
+  if (m.kind === 'contact') {
+    log('[contact card dropped]', 'dropped');
+    return reply('Contact cards are not relayed. Please send the details as text.');
+  }
   if (m.kind === 'unsupported') {
     log('[media dropped: only text and documents are relayed]', 'dropped');
     return reply(isTeacher

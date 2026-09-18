@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const express = require('express');
 const db = require('./db');
 const cfg = require('./config');
+const gowa = require('./gowa');
 const { toJid } = require('./redact');
 const { dueDates } = require('./schedule');
 
@@ -32,7 +33,8 @@ const handle = (status, fn) => (req, res) => {
     res.status(status).json(fn(req.body || {}, req));
   } catch (err) {
     const unique = String(err.code).startsWith('SQLITE_CONSTRAINT_UNIQUE');
-    res.status(err.status || (unique ? 409 : 400)).json({ error: unique ? 'phone number is already used' : err.message });
+    const clash = /\.tag\b/.test(err.message) ? 'that tag is already used by this teacher' : 'phone number is already used';
+    res.status(err.status || (unique ? 409 : 400)).json({ error: unique ? clash : err.message });
   }
 };
 
@@ -96,13 +98,28 @@ router.post('/students', handle(201, (b) => {
 // Old classes and messages keep their teacher_id, so history survives a switch.
 router.patch('/students/:id', handle(200, (b, req) => {
   const s = { ...student(req.params.id) };
+  const oldTeacher = s.teacher_id;
   if ('teacher_id' in b) s.teacher_id = teacherId(b.teacher_id);
   if ('tag' in b) s.tag = tag(b.tag, s.name);
   if ('grade' in b) s.grade = b.grade || null;
   checkTag(s);
   db.prepare('UPDATE students SET teacher_id = @teacher_id, tag = @tag, grade = @grade WHERE id = @id').run(s);
+  if (oldTeacher && s.teacher_id !== oldTeacher) flagOrphans(s, oldTeacher);
   return student(s.id);
 }));
+
+// After a switch the old teacher can neither be reminded (reminders skip them) nor deliver (the relay
+// refuses an ended assignment), so anything already overdue would go missing. Flag it for the admin instead.
+const orphans = db.prepare(`UPDATE classes SET needs_followup = 1 WHERE student_id = ? AND teacher_id = ?
+  AND ((notes_due_at <= ? AND notes_sent_at IS NULL) OR (test_result_due_at <= ? AND test_result_sent_at IS NULL))`);
+function flagOrphans(s, oldTeacher) {
+  const now = new Date().toISOString();
+  const { changes } = orphans.run(s.id, oldTeacher, now, now);
+  if (!changes) return;
+  const was = db.prepare('SELECT name FROM teachers WHERE id = ?').get(oldTeacher);
+  gowa.alertAdmin(`${s.name} moved off teacher ${was.name}: ${changes} class(es) still owe notes or a test result. `
+    + 'Marked needs_followup.').catch((err) => console.error('[admin] orphan alert failed:', err.message));
+}
 
 router.get('/students/:id/messages', handle(200, (_b, req) => db.prepare(`SELECT m.*, t.name AS teacher
   FROM messages m JOIN teachers t ON t.id = m.teacher_id WHERE m.student_id = ? ORDER BY m.sent_at`).all(req.params.id)));

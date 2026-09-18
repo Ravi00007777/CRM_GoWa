@@ -15,6 +15,7 @@ const { relay, verifySignature } = require('../src/relay');
 const { runReminders } = require('../src/reminders');
 
 const sent = [];
+const realFetch = globalThis.fetch;
 global.fetch = async (url, opts = {}) => {
   if (url.endsWith('/devices')) {
     return Response.json({ code: 'SUCCESS', results: [
@@ -95,8 +96,8 @@ test('number-only message flagged; contact card dropped; image nudges sender', a
   await relay('teacher', { id: 'm5', from: T, image: 'statics/media/x.jpg' });
   const status = db.prepare("SELECT wa_message_id, status FROM messages WHERE wa_message_id IN ('m3','m4','m5') ORDER BY id").all();
   assert.deepEqual(status.map((r) => r.status), ['flagged', 'dropped', 'dropped']);
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].body.phone, T); // nudge back to teacher, not relayed
+  assert.deepEqual(sent.map((s) => s.body.phone), [T, T]); // both nudges go back to the teacher, nothing relayed
+  assert.match(sent[0].body.message, /Contact cards are not relayed/);
   assert.equal(db.prepare('SELECT notes_sent_at FROM classes WHERE id = 1').get().notes_sent_at, null);
 });
 
@@ -168,4 +169,53 @@ test('multi-student teacher + sibling parent: #tag, swipe-reply, ask when unclea
   await relay('teacher', { id: 'r9', from: T, body: 'one more thing', replied_to_id: 'r2' });
   assert.equal(sent.length, before + 1);
   assert.deepEqual([msg().phone, msg().message], [T, 'That conversation has ended, so your message was not sent.']);
+});
+
+test('duplicate tag rejected by the DB; an ambiguous tag refuses instead of guessing', async () => {
+  // Same teacher, different parents, same tag: the unique index is what stops a silent misroute.
+  assert.throws(() => db.prepare("INSERT INTO students (id, name, tag, parent_id, teacher_id) VALUES (4, 'Rhea', 'diya', 2, 1)").run(),
+    /UNIQUE constraint failed/);
+
+  // If a duplicate ever predates the index, route() must refuse rather than pick one.
+  db.exec('DROP INDEX students_teacher_tag');
+  db.prepare("INSERT INTO students (id, name, tag, parent_id, teacher_id) VALUES (4, 'Rhea', 'diya', 2, 1)").run();
+  sent.length = 0;
+  await relay('teacher', { id: 'd1', from: T, body: '#diya homework done?' });
+  assert.equal(sent.length, 1);
+  assert.equal(sent.at(-1).body.phone, T); // refusal to the teacher, nothing relayed to either parent
+  assert.match(sent.at(-1).body.message, /More than one student has the tag #diya/);
+  db.prepare('DELETE FROM students WHERE id = 4').run();
+  db.exec('CREATE UNIQUE INDEX students_teacher_tag ON students(teacher_id, tag) WHERE teacher_id IS NOT NULL');
+});
+
+test('unroutable contact card still answers the sender', async () => {
+  db.prepare('UPDATE students SET teacher_id = 1 WHERE id = 2').run(); // Rohan back with Asha -> 2 students, no tag possible
+  sent.length = 0;
+  await relay('teacher', { id: 'd2', from: T, contact: { vcard: 'BEGIN:VCARD' } });
+  assert.equal(sent.length, 1);
+  assert.equal(sent.at(-1).body.phone, T);
+  assert.match(sent.at(-1).body.message, /Contact cards are not relayed/);
+  assert.equal(db.prepare("SELECT 1 FROM messages WHERE wa_message_id = 'd2'").get(), undefined); // no pair, no row
+});
+
+test('reassigning a student flags classes that still owe notes', async (t) => {
+  const express = require('express');
+  const app = express();
+  app.use('/admin', express.json(), require('../src/admin'));
+  const server = app.listen(0);
+  t.after(() => server.close());
+  const { port } = server.address();
+
+  db.prepare(`INSERT INTO classes (id, teacher_id, student_id, held_at, notes_due_at, test_result_due_at)
+    VALUES (2, 1, 2, '2026-09-14T11:00:00.000Z', '2026-09-15T11:00:00.000Z', '2036-09-21T05:30:00.000Z')`).run();
+  sent.length = 0;
+  const res = await realFetch(`http://127.0.0.1:${port}/admin/students/2`, {
+    method: 'PATCH',
+    headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+    body: JSON.stringify({ teacher_id: 2 }),
+  });
+  assert.equal(res.status, 200);
+  assert.equal(db.prepare('SELECT needs_followup FROM classes WHERE id = 2').get().needs_followup, 1);
+  assert.equal(sent.at(-1).body.phone, '910000000000@s.whatsapp.net');
+  assert.match(sent.at(-1).body.message, /Rohan moved off teacher Asha: 1 class\(es\)/);
 });
