@@ -9,7 +9,12 @@ APP=/opt/almaed
 
 echo "--- packages"
 apt-get update -qq
-apt-get install -y -qq nodejs npm sqlite3 ufw ca-certificates curl
+apt-get install -y -qq sqlite3 ufw ca-certificates curl gnupg
+# Ubuntu 24.04 ships Node 18; better-sqlite3 needs >= 22, so take it from NodeSource.
+[ "$(node -v 2>/dev/null | cut -c2- | cut -d. -f1)" -ge 22 ] 2>/dev/null || {
+  curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
+  apt-get install -y -qq nodejs
+}
 command -v docker >/dev/null || curl -fsSL https://get.docker.com | sh
 command -v caddy >/dev/null || {
   apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
