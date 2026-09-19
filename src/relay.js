@@ -2,6 +2,7 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const cfg = require('./config');
 const people = require('./people');
+const groups = require('./groups');
 const gowa = require('./gowa');
 const { redact, toJid } = require('./redact');
 
@@ -11,6 +12,8 @@ function verifySignature(rawBody, header, secret = cfg.webhookSecret) {
   const received = Buffer.from(String(header).replace(/^sha256=/, ''), 'hex');
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
+
+const userPart = (j) => String(j ?? '').split('@')[0].split(':')[0];
 
 // AlmaEd holds the numbers; a sender may arrive as a phone JID, a LID, or both.
 const findSender = (lookup, p) => lookup([p.from, p.from_lid].filter(Boolean));
@@ -62,6 +65,74 @@ async function alertOnce(key, text) {
   if (now - (lastAlert.get(key) || 0) < DAY) return;
   lastAlert.set(key, now);
   try { await gowa.alertAdmin(text); } catch (err) { console.error('[relay] admin alert failed:', err.message); }
+}
+
+// A message in one of AlmaEd's groups. The group says which conversation it is, so nothing has
+// to be tagged. Only the one teacher or student in that group is relayed: the admin is there to
+// watch, and anything the relay itself posted is skipped.
+async function relayGroup(chatJid, p) {
+  const side = await groups.sideOfGroup(chatJid);
+  if (!side) return; // an ordinary group one of the relay numbers happens to be in
+
+  const pair = await people.pairOf(side.teacherId, side.studentId);
+  if (!pair) return console.log('[groups] message for a pair that is no longer assigned, ignored');
+
+  // WhatsApp names the sender differently in a group than in a 1:1 chat, and gowa passes
+  // several shapes through, so every candidate is checked against the one person expected here.
+  const expected = userPart(side.isTeacher ? pair.teacher_jid : pair.parent_jid);
+  const candidates = [p.participant, p.sender, p.from, p.from_lid].filter(Boolean).map(userPart);
+  if (!candidates.includes(expected)) {
+    return console.log(`[groups] ignored ${candidates.join('/') || 'unknown'} in ${chatJid}` +
+      ` (only ${expected} is relayed from this group)`);
+  }
+
+  const ownDevice = side.isTeacher ? cfg.teacherDevice : cfg.studentDevice;
+  const otherDevice = side.isTeacher ? cfg.studentDevice : cfg.teacherDevice;
+  const to = side.isTeacher ? side.studentGroupJid : side.teacherGroupJid;
+  if (!to) return console.error(`[groups] ${chatJid} has no counterpart group yet`);
+
+  const reply = (text) => gowa.sendText(ownDevice, chatJid, text);
+  const direction = side.isTeacher ? 'TEACHER_TO_STUDENT' : 'STUDENT_TO_TEACHER';
+  const log = (content, status, outId = null) => people.log({
+    teacherId: side.teacherId, studentId: side.studentId, direction,
+    waMessageId: p.id, outMessageId: outId, content, status,
+  }).catch((err) => console.error('[relay] log failed:', err.message));
+
+  const m = classify(p);
+  if (m.kind === 'ignore') return;
+  if (m.kind === 'contact') {
+    log('[contact card dropped]', 'DROPPED');
+    return reply('Contact cards are not relayed. Please send the details as text.');
+  }
+  if (m.kind === 'unsupported') {
+    log('[media dropped: only text and documents are relayed]', 'DROPPED');
+    return reply('Images, audio, video and locations are not relayed. Please send text or a PDF/document.');
+  }
+
+  let body = m.kind === 'text' ? m.text : m.caption || '';
+  const isResult = side.isTeacher && /#result\b/i.test(body);
+  if (isResult) body = body.replace(/#result\b/gi, '').trim();
+
+  const { text, flagged } = redact(body);
+  if (flagged) {
+    log(text, 'FLAGGED');
+    return reply('That message was not passed on: it looked like a phone number or email address.');
+  }
+
+  const label = side.isTeacher
+    ? `Teacher ${pair.teacher}${isResult ? ' - Test result' : ''}`
+    : `Student ${pair.student}`;
+  const out = text.trim() ? `${label}:\n${text}` : label;
+
+  let sent;
+  if (m.kind === 'document') {
+    if (!m.path) return log('[document not downloaded by gowa]', 'DROPPED');
+    const file = await gowa.fetchMedia(m.path);
+    sent = await gowa.sendFile(otherDevice, to, file, `${pair.tag}${m.ext}`, out);
+  } else {
+    sent = await gowa.sendText(otherDevice, to, out);
+  }
+  log(text, 'RELAYED', sent?.message_id || null);
 }
 
 async function relay(deviceId, p) {
@@ -157,13 +228,22 @@ async function handleWebhook(req, res) {
   if (!verifySignature(req.rawBody, req.get('X-Hub-Signature-256'))) return res.sendStatus(401);
 
   const { event, device_id: deviceId, payload: p } = req.body || {};
+  // ponytail: temporary, while the group relay is built. Groups reach the relay now that gowa
+  // no longer ignores @g.us, and a group message names its sender differently from a 1:1 one.
+  if (p) {
+    console.log('[wh]', JSON.stringify({ chat: p.chat_id, from: p.from, lid: p.from_lid,
+      participant: p.participant, sender: p.sender, pushname: p.pushname, me: p.is_from_me,
+      body: (p.body || '').slice(0, 30), keys: Object.keys(p).join(',') }));
+  }
   // Only 1:1 chats: skip groups, status updates (status@broadcast), broadcast lists and channels (@newsletter).
-  const oneToOne = /@(s\.whatsapp\.net|lid)$/.test(String(p?.chat_id || p?.from || ''));
-  if (event !== 'message' || !p || p.is_from_me || !oneToOne) return res.sendStatus(200);
+  const chat = String(p?.chat_id || p?.from || '');
+  const oneToOne = /@(s\.whatsapp\.net|lid)$/.test(chat);
+  const isGroup = /@g\.us$/.test(chat);
+  if (event !== 'message' || !p || p.is_from_me || (!oneToOne && !isGroup)) return res.sendStatus(200);
   if (p.id && await people.seen(p.id)) return res.sendStatus(200); // gowa retry of an already-handled message
 
   try {
-    await relay(deviceId, p);
+    await (isGroup ? relayGroup(chat, p) : relay(deviceId, p));
     res.sendStatus(200);
   } catch (err) {
     console.error('[relay] failed:', err.message);

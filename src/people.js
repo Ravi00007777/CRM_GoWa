@@ -63,6 +63,11 @@ async function childrenOfParent(jid) {
   return (await directory()).filter((p) => user(p.parent_jid) === user(jid));
 }
 
+// One pair by ids, for a group whose conversation is already known.
+async function pairOf(teacherId, studentId) {
+  return (await directory()).find((p) => p.teacher_id === teacherId && p.student_id === studentId);
+}
+
 async function findTeacher(jids) {
   const dir = await directory();
   const hit = dir.find((p) => jids.some((j) => j && user(p.teacher_jid) === user(j)));
@@ -95,4 +100,4 @@ async function pairOfMessage(waId) {
 
 const seen = async (waId) => (await pool.query('SELECT 1 FROM "WaMessage" WHERE "waMessageId" = $1', [waId])).rowCount > 0;
 
-module.exports = { studentsOfTeacher, childrenOfParent, findTeacher, findParent, log, pairOfMessage, seen, refresh, pool };
+module.exports = { directory, pairOf, studentsOfTeacher, childrenOfParent, findTeacher, findParent, log, pairOfMessage, seen, refresh, pool };
