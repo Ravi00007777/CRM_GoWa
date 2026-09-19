@@ -4,6 +4,7 @@ const { assertSafeOutbound } = require('./redact');
 // gowa accepts several user:pass pairs; the app uses the first.
 const AUTH = 'Basic ' + Buffer.from(cfg.gowaBasicAuth.split(',')[0]).toString('base64');
 const PHONE_JID = /^\d{11,15}@s\.whatsapp\.net$/; // bare 10-digit numbers fail silently in gowa
+const GROUP_JID = /^\d+@g\.us$/;
 
 async function call(path, { method = 'POST', device, json, form } = {}) {
   const headers = { Authorization: AUTH };
@@ -22,7 +23,31 @@ async function call(path, { method = 'POST', device, json, form } = {}) {
 }
 
 function checkRecipient(jid) {
-  if (!PHONE_JID.test(jid)) throw new Error('Recipient must be a country-coded JID like 91XXXXXXXXXX@s.whatsapp.net');
+  // A conversation is carried by a group, so both shapes are valid recipients.
+  if (!PHONE_JID.test(jid) && !GROUP_JID.test(jid)) {
+    throw new Error('Recipient must be 91XXXXXXXXXX@s.whatsapp.net or a group JID ending @g.us');
+  }
+}
+
+// Returns the new group's JID. The participants WhatsApp refused to add come back separately:
+// a person whose privacy settings block being added is simply left out, with no error, so the
+// caller has to check rather than assume everyone is in.
+async function createGroup(device, title, participants) {
+  participants.forEach((jid) => {
+    if (!PHONE_JID.test(jid)) throw new Error(`Cannot add ${jid} to a group: not a phone JID`);
+  });
+  const r = await call('/group', { device, json: { title, participants } });
+  return { jid: r.group_id, missing: r.participant_status?.filter((p) => p.status !== 'success') ?? [] };
+}
+
+async function renameGroup(device, jid, name) {
+  return call('/group/name', { device, json: { group_id: jid, name } });
+}
+
+async function groupParticipants(device, jid) {
+  const r = await call('/user/my/groups', { method: 'GET', device });
+  const g = (r?.data ?? []).find((x) => x.JID === jid);
+  return (g?.Participants ?? []).map((p) => p.PhoneNumber || p.JID);
 }
 
 async function sendText(device, jid, message) {
@@ -69,4 +94,4 @@ async function roleOfDevice(deviceId) {
   return match();
 }
 
-module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice };
+module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants };

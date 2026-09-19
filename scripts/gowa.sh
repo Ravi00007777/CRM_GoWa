@@ -33,5 +33,4 @@ exec "./$OS-$ARCH" rest \
   --webhook="http://localhost:${PORT:-8080}/webhook" \
   --webhook-secret="$WEBHOOK_SECRET" \
   --webhook-events=message \
-  --webhook-ignore-jids=@g.us \
   --auto-download-media=true
