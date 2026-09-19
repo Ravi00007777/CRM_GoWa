@@ -1,7 +1,7 @@
 const crypto = require('node:crypto');
 const path = require('node:path');
-const db = require('./db');
 const cfg = require('./config');
+const people = require('./people');
 const gowa = require('./gowa');
 const { redact, toJid } = require('./redact');
 
@@ -12,39 +12,8 @@ function verifySignature(rawBody, header, secret = cfg.webhookSecret) {
   return received.length === expected.length && crypto.timingSafeEqual(received, expected);
 }
 
-const PAIR = `SELECT s.id AS student_id, s.name AS student, s.tag, t.id AS teacher_id, t.name AS teacher,
-  p.wa_jid AS parent_jid, t.wa_jid AS teacher_jid
-  FROM students s JOIN parents p ON p.id = s.parent_id JOIN teachers t ON t.id = s.teacher_id
-  WHERE s.archived_at IS NULL AND t.archived_at IS NULL`;
-const q = {
-  teacherByJid: db.prepare('SELECT * FROM teachers WHERE wa_jid = ?'),
-  parentByJid: db.prepare('SELECT * FROM parents WHERE wa_jid = ?'),
-  studentsOfTeacher: db.prepare(`${PAIR} AND s.teacher_id = ? ORDER BY s.tag`),
-  childrenOfParent: db.prepare(`${PAIR} AND s.parent_id = ? ORDER BY s.tag`),
-  byMessageId: db.prepare('SELECT teacher_id, student_id FROM messages WHERE wa_message_id = ? OR out_message_id = ? LIMIT 1'),
-  // Notes/results belong to the latest class that has already started.
-  classForPair: db.prepare(`SELECT id FROM classes WHERE teacher_id = ? AND student_id = ? AND held_at <= ?
-    ORDER BY held_at DESC, id DESC LIMIT 1`),
-  seen: db.prepare('SELECT 1 FROM messages WHERE wa_message_id = ?'),
-  log: db.prepare(`INSERT OR IGNORE INTO messages
-    (teacher_id, student_id, class_id, direction, wa_message_id, out_message_id, content, status, sent_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`),
-  notesSent: db.prepare('UPDATE classes SET notes_sent_at = ? WHERE id = ? AND notes_sent_at IS NULL'),
-  resultSent: db.prepare('UPDATE classes SET test_result_sent_at = ? WHERE id = ? AND test_result_sent_at IS NULL'),
-};
-
-function findSender(lookup, p) {
-  for (const v of [p.from, p.from_lid]) {
-    if (!v) continue;
-    const tries = [String(v)];
-    try { tries.push(toJid(v)); } catch { /* LID or malformed: raw value only */ }
-    for (const jid of tries) {
-      const row = lookup.get(jid);
-      if (row) return row;
-    }
-  }
-  return null;
-}
+// AlmaEd holds the numbers; a sender may arrive as a phone JID, a LID, or both.
+const findSender = (lookup, p) => lookup([p.from, p.from_lid].filter(Boolean));
 
 function classify(p) {
   if (p.contact || /BEGIN:VCARD/i.test(p.body || '')) return { kind: 'contact' };
@@ -63,7 +32,7 @@ function classify(p) {
 // Which conversation a message belongs to. Never guesses: a leading #tag wins, then a swipe-reply to an
 // earlier relayed message, then the only assigned student; otherwise the sender is asked and nothing is sent.
 const TAG = /^\s*#([\w-]+)\s*/;
-function route(pairs, body, repliedTo, noun) {
+function route(pairs, body, prev, noun) {
   const tags = pairs.map((x) => `#${x.tag}`).join(' or ');
   const m = body.match(TAG);
   if (m) {
@@ -75,7 +44,6 @@ function route(pairs, body, repliedTo, noun) {
       ? `More than one ${noun} has the tag #${m[1]}, so your message was not sent. Please tell the admin.`
       : `No ${noun} has the tag #${m[1]}. Use ${tags}.` };
   }
-  const prev = repliedTo && q.byMessageId.get(repliedTo, repliedTo);
   if (prev) {
     const pair = pairs.find((x) => x.teacher_id === prev.teacher_id && x.student_id === prev.student_id);
     return pair ? { pair, body } : { refuse: 'That conversation has ended, so your message was not sent.' };
@@ -103,16 +71,19 @@ async function relay(deviceId, p) {
   const isTeacher = role === 'teacher';
   const ownDevice = isTeacher ? cfg.teacherDevice : cfg.studentDevice;
   const otherDevice = isTeacher ? cfg.studentDevice : cfg.teacherDevice;
-  const direction = isTeacher ? 'teacher_to_student' : 'student_to_teacher';
+  const direction = isTeacher ? 'TEACHER_TO_STUDENT' : 'STUDENT_TO_TEACHER';
   const noun = isTeacher ? 'student' : 'child';
 
-  const sender = findSender(isTeacher ? q.teacherByJid : q.parentByJid, p);
+  const sender = await findSender(isTeacher ? people.findTeacher : people.findParent, p);
   if (!sender) {
     // Relay numbers may also receive ordinary chats, so unknown senders are only logged, never alerted.
-    return console.log(`[relay] ignored message from unknown sender on ${role} number`);
+    // The identifiers are logged because this is also what a mistyped phone number looks like, and
+    // without them there is no way to tell that apart from an ordinary stranger messaging in.
+    return console.log(`[relay] ignored message from unknown sender on ${role} number`,
+      `(from=${p.from || '-'} from_lid=${p.from_lid || '-'})`);
   }
   const reply = (text) => gowa.sendText(ownDevice, sender.wa_jid, text);
-  const pairs = (isTeacher ? q.studentsOfTeacher : q.childrenOfParent).all(sender.id);
+  const pairs = await (isTeacher ? people.studentsOfTeacher : people.childrenOfParent)(sender.wa_jid);
 
   const m = classify(p);
   if (m.kind === 'ignore') return;
@@ -132,21 +103,24 @@ async function relay(deviceId, p) {
 
   const isResult = isTeacher && /#result\b/i.test(body);
   if (isResult) body = body.replace(/#result\b/gi, '').trim();
-  const r = route(pairs, body, p.replied_to_id, noun);
+  const prev = p.replied_to_id ? await people.pairOfMessage(p.replied_to_id) : null;
+  const r = route(pairs, body, prev, noun);
 
-  const now = new Date().toISOString();
-  const cls = r.pair && q.classForPair.get(r.pair.teacher_id, r.pair.student_id, now);
-  const log = (content, status, outId = null) => r.pair && q.log.run(r.pair.teacher_id, r.pair.student_id,
-    cls?.id ?? null, direction, p.id || null, outId, content, status, now);
+  // Nothing to log against when routing failed, so a refusal leaves no row - see the media
+  // branches below, which always answer the sender instead.
+  const log = (content, status, outId = null) => r.pair && people.log({
+    teacherId: r.pair.teacher_id, studentId: r.pair.student_id, direction,
+    waMessageId: p.id, outMessageId: outId, content, status,
+  }).catch((err) => console.error('[relay] log failed:', err.message));
 
   // Media is never relayed whatever it routes to, so the sender is always told - including when routing
   // failed, where there is no pair to log against and silence would look like a successful send.
   if (m.kind === 'contact') {
-    log('[contact card dropped]', 'dropped');
+    log('[contact card dropped]', 'DROPPED');
     return reply('Contact cards are not relayed. Please send the details as text.');
   }
   if (m.kind === 'unsupported') {
-    log('[media dropped: only text and documents are relayed]', 'dropped');
+    log('[media dropped: only text and documents are relayed]', 'DROPPED');
     return reply(isTeacher
       ? 'Images, audio, video and locations are not relayed. Please send notes as a PDF/document.'
       : 'Images, audio, video and locations are not relayed. Please send text or a PDF/document.');
@@ -155,7 +129,7 @@ async function relay(deviceId, p) {
 
   const { pair } = r;
   const { text, flagged } = redact(r.body);
-  if (flagged) return log(text, 'flagged');
+  if (flagged) return log(text, 'FLAGGED');
 
   const label = isTeacher
     ? `Teacher ${pair.teacher} (for ${pair.student})${isResult ? ' - Test result' : ''}`
@@ -166,30 +140,31 @@ async function relay(deviceId, p) {
   let sent;
   if (m.kind === 'document') {
     if (!m.path) {
-      log('[document not downloaded by gowa]', 'dropped');
+      log('[document not downloaded by gowa]', 'DROPPED');
       return alertOnce(`nodoc:${pair.teacher_id}:${pair.student_id}`,
         `${pair.teacher} / ${pair.student}: a document could not be relayed (gowa auto-download-media is off?).`);
     }
     const file = await gowa.fetchMedia(m.path);
-    sent = await gowa.sendFile(otherDevice, to, file, `${cls ? `class-${cls.id}` : pair.tag}${m.ext}`, out);
+    sent = await gowa.sendFile(otherDevice, to, file, `${pair.tag}${m.ext}`, out);
   } else {
     sent = await gowa.sendText(otherDevice, to, out);
   }
 
-  log(text, 'relayed', sent?.message_id || null);
-  if (!cls) return;
-  if (isResult) q.resultSent.run(now, cls.id);
-  else if (isTeacher && m.kind === 'document') q.notesSent.run(now, cls.id);
+  log(text, 'RELAYED', sent?.message_id || null);
 }
 
 async function handleWebhook(req, res) {
   if (!verifySignature(req.rawBody, req.get('X-Hub-Signature-256'))) return res.sendStatus(401);
 
   const { event, device_id: deviceId, payload: p } = req.body || {};
+  // ponytail: temporary. Prints what every webhook looks like at the door, including the ones
+  // dropped by the filters below, which are otherwise invisible. Remove once pairing is proven.
+  console.log('[webhook]', JSON.stringify({ event, deviceId, chat: p?.chat_id, from: p?.from,
+    lid: p?.from_lid, me: p?.is_from_me, body: (p?.body || '').slice(0, 30) }));
   // Only 1:1 chats: skip groups, status updates (status@broadcast), broadcast lists and channels (@newsletter).
   const oneToOne = /@(s\.whatsapp\.net|lid)$/.test(String(p?.chat_id || p?.from || ''));
   if (event !== 'message' || !p || p.is_from_me || !oneToOne) return res.sendStatus(200);
-  if (p.id && q.seen.get(p.id)) return res.sendStatus(200); // gowa retry of an already-handled message
+  if (p.id && await people.seen(p.id)) return res.sendStatus(200); // gowa retry of an already-handled message
 
   try {
     await relay(deviceId, p);

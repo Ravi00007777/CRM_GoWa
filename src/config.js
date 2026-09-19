@@ -8,7 +8,9 @@ function need(key) {
 
 module.exports = {
   port: Number(process.env.PORT) || 8080,
-  dbPath: process.env.DB_PATH || './data/crm.db',
+  // AlmaEd's Supabase Postgres: the relay reads teachers, students and batches from it and
+  // writes the relayed-message log back. Admin edits everything on the AlmaEd site.
+  databaseUrl: need('DATABASE_URL'),
   gowaUrl: need('GOWA_BASE_URL').replace(/\/$/, ''),
   gowaBasicAuth: need('GOWA_BASIC_AUTH'),
   teacherDevice: need('TEACHER_DEVICE_ID'),
