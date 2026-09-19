@@ -157,10 +157,6 @@ async function handleWebhook(req, res) {
   if (!verifySignature(req.rawBody, req.get('X-Hub-Signature-256'))) return res.sendStatus(401);
 
   const { event, device_id: deviceId, payload: p } = req.body || {};
-  // ponytail: temporary. Prints what every webhook looks like at the door, including the ones
-  // dropped by the filters below, which are otherwise invisible. Remove once pairing is proven.
-  console.log('[webhook]', JSON.stringify({ event, deviceId, chat: p?.chat_id, from: p?.from,
-    lid: p?.from_lid, me: p?.is_from_me, body: (p?.body || '').slice(0, 30) }));
   // Only 1:1 chats: skip groups, status updates (status@broadcast), broadcast lists and channels (@newsletter).
   const oneToOne = /@(s\.whatsapp\.net|lid)$/.test(String(p?.chat_id || p?.from || ''));
   if (event !== 'message' || !p || p.is_from_me || !oneToOne) return res.sendStatus(200);
