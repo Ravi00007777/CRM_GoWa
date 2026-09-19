@@ -84,7 +84,7 @@
       </form>
       <p class="msg"></p>
     </section>
-    <section><div class="scroll"><table id="teacherTable"></table></div></section>
+    <section><div class="scroll"><table id="teacherTable"></table></div><p class="msg" id="teacherMsg"></p></section>
   </div>
 
   <div id="students" data-panel hidden>
@@ -160,10 +160,43 @@ function button(text, onClick) {
   return b;
 }
 
+// Saves on blur or Enter, not on every keystroke.
+function field(value, width, save) {
+  const i = Object.assign(document.createElement('input'), { value: value ?? '', style: `min-width:0;width:${width}px` });
+  i.onchange = () => save(i.value);
+  return i;
+}
+
+// Two clicks instead of confirm(): a modal dialog blocks the page and there is nothing to
+// undo a delete with.
+function danger(text, run) {
+  const b = button(text, () => {
+    if (b.dataset.armed) return run();
+    b.dataset.armed = '1'; b.textContent = 'Sure?'; b.style.color = 'var(--bad)';
+    setTimeout(() => { delete b.dataset.armed; b.textContent = text; b.style.color = ''; }, 4000);
+  });
+  return b;
+}
+
+async function save(msgEl, fn) {
+  $(msgEl).textContent = '';
+  try { await fn(); } catch (err) { $(msgEl).textContent = err.message; }
+  await reload();
+}
+
 let teachers = [];
+const patchTeacher = (t, body) => save('#teacherMsg', () => api('teachers/' + t.id, { method: 'PATCH', body: JSON.stringify(body) }));
+
 async function loadTeachers() {
   teachers = await api('teachers');
-  table($('#teacherTable'), ['ID', 'Name', 'WhatsApp', 'Payout email', 'Students'], teachers.map((t) => [t.id, t.name, phone(t.wa_jid), t.payout_email, t.students]));
+  table($('#teacherTable'), ['ID', 'Name', 'WhatsApp', 'Payout email', 'Students', ''], teachers.map((t) => [
+    t.id,
+    field(t.name, 130, (v) => patchTeacher(t, { name: v })),
+    field(phone(t.wa_jid), 140, (v) => patchTeacher(t, { phone: v })),
+    field(t.payout_email, 170, (v) => patchTeacher(t, { payout_email: v })),
+    t.students,
+    danger('Delete', () => save('#teacherMsg', () => api('teachers/' + t.id, { method: 'DELETE' }))),
+  ]));
   $('#students [name=teacher_id]').replaceChildren(new Option('Not assigned', ''), ...teachers.map((t) => new Option(t.name, t.id)));
 }
 
@@ -174,17 +207,27 @@ async function patchStudent(s, body) {
   await reload();
 }
 
+const patchParent = (s, body) => save('#studentMsg', () => api('parents/' + s.parent_id, { method: 'PATCH', body: JSON.stringify(body) }));
+
 async function loadStudents() {
   const rows = await api('students');
-  table($('#studentTable'), ['ID', 'Student', 'Tag', 'Grade', 'Teacher', 'Parent', ''], rows.map((s) => {
+  table($('#studentTable'), ['ID', 'Student', 'Tag', 'Grade', 'Teacher', 'Parent name', 'Parent WhatsApp', '', ''], rows.map((s) => {
     const pick = document.createElement('select');
     pick.append(new Option('Not assigned', ''), ...teachers.map((t) => new Option(t.name, t.id)));
     pick.value = s.teacher_id ?? '';
     pick.onchange = () => patchStudent(s, { teacher_id: pick.value || null });
-    const tagIn = Object.assign(document.createElement('input'), { value: s.tag, style: 'min-width:0;width:90px' });
-    tagIn.onchange = () => patchStudent(s, { tag: tagIn.value });
-    return [s.id, s.name, tagIn, s.grade, pick, `${s.parent_name ? s.parent_name + ' ' : ''}${phone(s.parent_wa_jid)}`,
-      button('Messages', () => showChat(s))];
+    return [
+      s.id,
+      field(s.name, 120, (v) => patchStudent(s, { name: v })),
+      field(s.tag, 90, (v) => patchStudent(s, { tag: v })),
+      field(s.grade, 55, (v) => patchStudent(s, { grade: v })),
+      pick,
+      // Siblings share one parent record, so this edits the contact for all of them.
+      field(s.parent_name, 110, (v) => patchParent(s, { name: v })),
+      field(phone(s.parent_wa_jid), 140, (v) => patchParent(s, { phone: v })),
+      button('Messages', () => showChat(s)),
+      danger('Delete', () => save('#studentMsg', () => api('students/' + s.id, { method: 'DELETE' }))),
+    ];
   }));
   $('#classes [name=student_id]').replaceChildren(...rows.filter((s) => s.teacher_id)
     .map((s) => new Option(`${s.name} (#${s.tag}) with ${s.teacher}`, s.id)));

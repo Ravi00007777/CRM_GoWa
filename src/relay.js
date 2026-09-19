@@ -14,12 +14,13 @@ function verifySignature(rawBody, header, secret = cfg.webhookSecret) {
 
 const PAIR = `SELECT s.id AS student_id, s.name AS student, s.tag, t.id AS teacher_id, t.name AS teacher,
   p.wa_jid AS parent_jid, t.wa_jid AS teacher_jid
-  FROM students s JOIN parents p ON p.id = s.parent_id JOIN teachers t ON t.id = s.teacher_id`;
+  FROM students s JOIN parents p ON p.id = s.parent_id JOIN teachers t ON t.id = s.teacher_id
+  WHERE s.archived_at IS NULL AND t.archived_at IS NULL`;
 const q = {
   teacherByJid: db.prepare('SELECT * FROM teachers WHERE wa_jid = ?'),
   parentByJid: db.prepare('SELECT * FROM parents WHERE wa_jid = ?'),
-  studentsOfTeacher: db.prepare(`${PAIR} WHERE s.teacher_id = ? ORDER BY s.tag`),
-  childrenOfParent: db.prepare(`${PAIR} WHERE s.parent_id = ? ORDER BY s.tag`),
+  studentsOfTeacher: db.prepare(`${PAIR} AND s.teacher_id = ? ORDER BY s.tag`),
+  childrenOfParent: db.prepare(`${PAIR} AND s.parent_id = ? ORDER BY s.tag`),
   byMessageId: db.prepare('SELECT teacher_id, student_id FROM messages WHERE wa_message_id = ? OR out_message_id = ? LIMIT 1'),
   // Notes/results belong to the latest class that has already started.
   classForPair: db.prepare(`SELECT id FROM classes WHERE teacher_id = ? AND student_id = ? AND held_at <= ?

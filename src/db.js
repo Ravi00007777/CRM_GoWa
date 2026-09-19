@@ -80,4 +80,11 @@ CREATE INDEX IF NOT EXISTS messages_pair ON messages(teacher_id, student_id, sen
 CREATE INDEX IF NOT EXISTS messages_out ON messages(out_message_id);
 `);
 
+// Rows that history points at are archived instead of deleted, so classes and the message log
+// keep their teacher and student. Archived rows are hidden from the dashboard and the relay.
+for (const t of ['teachers', 'students']) {
+  const has = db.prepare(`SELECT 1 FROM pragma_table_info('${t}') WHERE name = 'archived_at'`).get();
+  if (!has) db.exec(`ALTER TABLE ${t} ADD COLUMN archived_at TEXT`);
+}
+
 module.exports = db;

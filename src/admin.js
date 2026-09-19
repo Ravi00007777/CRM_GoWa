@@ -59,8 +59,41 @@ const teacherId = (v) => {
   return Number(v);
 };
 
-router.get('/teachers', handle(200, () => db.prepare(`SELECT t.*,
-  (SELECT COUNT(*) FROM students s WHERE s.teacher_id = t.id) AS students FROM teachers t ORDER BY t.name`).all()));
+router.get('/teachers', handle(200, (_b, req) => db.prepare(`SELECT t.*,
+  (SELECT COUNT(*) FROM students s WHERE s.teacher_id = t.id AND s.archived_at IS NULL) AS students
+  FROM teachers t WHERE ${req.query.archived === '1' ? '1=1' : 't.archived_at IS NULL'} ORDER BY t.name`).all()));
+
+const teacher = (id) => db.prepare('SELECT * FROM teachers WHERE id = ?').get(id) || fail('teacher not found', 404);
+
+router.patch('/teachers/:id', handle(200, (b, req) => {
+  const t = { ...teacher(req.params.id) };
+  if ('name' in b) t.name = b.name || fail('name is required');
+  if ('phone' in b) t.wa_jid = toJid(b.phone, cfg.countryCode);
+  if ('payout_email' in b) t.payout_email = email(b.payout_email || null);
+  db.prepare('UPDATE teachers SET name = @name, wa_jid = @wa_jid, payout_email = @payout_email WHERE id = @id').run(t);
+  return teacher(t.id);
+}));
+
+// Deleting a teacher who appears in classes or the message log would orphan that history, so
+// those are archived instead: hidden everywhere, their students unassigned, the record kept.
+router.delete('/teachers/:id', handle(200, (_b, req) => {
+  const t = teacher(req.params.id);
+  const used = db.prepare('SELECT (SELECT COUNT(*) FROM classes WHERE teacher_id = ?) + (SELECT COUNT(*) FROM messages WHERE teacher_id = ?) AS n').get(t.id, t.id).n;
+  return db.transaction(() => {
+    if (!used) {
+      db.prepare('UPDATE students SET teacher_id = NULL WHERE teacher_id = ?').run(t.id);
+      db.prepare('DELETE FROM teachers WHERE id = ?').run(t.id);
+      return { id: t.id, deleted: true };
+    }
+    const now = new Date().toISOString();
+    for (const s of db.prepare('SELECT * FROM students WHERE teacher_id = ?').all(t.id)) {
+      db.prepare('UPDATE students SET teacher_id = NULL WHERE id = ?').run(s.id);
+      flagOrphans(s, t.id);
+    }
+    db.prepare('UPDATE teachers SET archived_at = ? WHERE id = ?').run(now, t.id);
+    return { id: t.id, archived: true };
+  })();
+}));
 
 router.post('/teachers', handle(201, (b) => {
   required(b, 'name', 'phone');
@@ -74,7 +107,32 @@ const STUDENTS = `SELECT s.*, p.wa_jid AS parent_wa_jid, p.name AS parent_name, 
   t.name AS teacher FROM students s JOIN parents p ON p.id = s.parent_id LEFT JOIN teachers t ON t.id = s.teacher_id`;
 const student = (id) => db.prepare(`${STUDENTS} WHERE s.id = ?`).get(id) || fail('student not found', 404);
 
-router.get('/students', handle(200, () => db.prepare(`${STUDENTS} ORDER BY s.name`).all()));
+router.get('/students', handle(200, (_b, req) => db.prepare(
+  `${STUDENTS} WHERE ${req.query.archived === '1' ? '1=1' : 's.archived_at IS NULL'} ORDER BY s.name`).all()));
+
+// Same rule as teachers: kept if any class or message refers to the student.
+router.delete('/students/:id', handle(200, (_b, req) => {
+  const s = student(req.params.id);
+  const used = db.prepare('SELECT (SELECT COUNT(*) FROM classes WHERE student_id = ?) + (SELECT COUNT(*) FROM messages WHERE student_id = ?) AS n').get(s.id, s.id).n;
+  if (!used) {
+    db.prepare('DELETE FROM students WHERE id = ?').run(s.id);
+    return { id: s.id, deleted: true };
+  }
+  db.prepare('UPDATE students SET archived_at = ?, teacher_id = NULL WHERE id = ?').run(new Date().toISOString(), s.id);
+  return { id: s.id, archived: true };
+}));
+
+// A parent is edited through their child's row; siblings share the record, so a change here
+// moves every sibling's contact at once.
+router.patch('/parents/:id', handle(200, (b, req) => {
+  const p = db.prepare('SELECT * FROM parents WHERE id = ?').get(req.params.id) || fail('parent not found', 404);
+  const row = { ...p };
+  if ('name' in b) row.name = b.name || null;
+  if ('phone' in b) row.wa_jid = toJid(b.phone, cfg.countryCode);
+  if ('payment_email' in b) row.payment_email = email(b.payment_email || null);
+  db.prepare('UPDATE parents SET name = @name, wa_jid = @wa_jid, payment_email = @payment_email WHERE id = @id').run(row);
+  return db.prepare('SELECT * FROM parents WHERE id = ?').get(row.id);
+}));
 
 // Siblings share a parent: the parent is found by phone, or created.
 router.post('/students', handle(201, (b) => {

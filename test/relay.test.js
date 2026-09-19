@@ -219,3 +219,43 @@ test('reassigning a student flags classes that still owe notes', async (t) => {
   assert.equal(sent.at(-1).body.phone, '910000000000@s.whatsapp.net');
   assert.match(sent.at(-1).body.message, /Rohan moved off teacher Asha: 1 class\(es\)/);
 });
+
+test('admin edit and delete: unused rows go, referenced rows are archived and leave the relay', async (t) => {
+  const express = require('express');
+  const app = express();
+  app.use('/admin', express.json(), require('../src/admin'));
+  const server = app.listen(0);
+  t.after(() => server.close());
+  const { port } = server.address();
+  const call = (path, method, body) => realFetch(`http://127.0.0.1:${port}/admin/${path}`, {
+    method, headers: { Authorization: 'Bearer t', 'Content-Type': 'application/json' },
+    body: body && JSON.stringify(body),
+  });
+
+  // Editing a teacher's phone: the relay must recognise the new number, not the old one.
+  const NEW = '915555500001';
+  assert.equal((await call('teachers/2', 'PATCH', { phone: NEW })).status, 200);
+  assert.equal(db.prepare('SELECT wa_jid FROM teachers WHERE id = 2').get().wa_jid, `${NEW}@s.whatsapp.net`);
+
+  // Parent contact is edited through the parent record, and siblings share it.
+  assert.equal((await call('parents/1', 'PATCH', { name: 'Mrs S' })).status, 200);
+  assert.equal(db.prepare('SELECT name FROM parents WHERE id = 1').get().name, 'Mrs S');
+
+  // Teacher 2 (Ravi) has messages from the earlier test, so a delete archives instead.
+  assert.ok(db.prepare('SELECT COUNT(*) n FROM messages WHERE teacher_id = 2').get().n > 0);
+  assert.deepEqual(await (await call('teachers/2', 'DELETE')).json(), { id: 2, archived: true });
+  assert.ok(db.prepare('SELECT archived_at FROM teachers WHERE id = 2').get().archived_at);
+  assert.equal(db.prepare('SELECT COUNT(*) n FROM students WHERE teacher_id = 2').get().n, 0); // unassigned
+  assert.equal((await (await call('teachers', 'GET')).json()).some((x) => x.id === 2), false); // hidden
+  assert.equal((await (await call('teachers?archived=1', 'GET')).json()).some((x) => x.id === 2), true);
+
+  // A student nothing refers to is really deleted.
+  db.prepare("INSERT INTO students (id, name, tag, parent_id) VALUES (9, 'Temp', 'temp', 2)").run();
+  assert.deepEqual(await (await call('students/9', 'DELETE')).json(), { id: 9, deleted: true });
+  assert.equal(db.prepare('SELECT 1 FROM students WHERE id = 9').get(), undefined);
+
+  // An archived student is invisible to routing: Kabir was Ravi's, now unassigned by the archive.
+  sent.length = 0;
+  await relay('student', { id: 'z1', from: S, body: 'hello' });
+  assert.match(sent.at(-1).body.message, /Diya/); // only the non-archived sibling remains
+});
