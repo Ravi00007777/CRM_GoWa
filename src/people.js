@@ -13,7 +13,8 @@ const pool = new Pool({ connectionString: cfg.databaseUrl, ssl: { rejectUnauthor
 // their parent's, which is how AlmaEd models it. Batch membership is the assignment.
 const DIRECTORY = `
   SELECT t.id AS teacher_id, t.name AS teacher, t.phone AS teacher_phone,
-         s.id AS student_id, s.name AS student, s."waTag" AS tag, s.phone AS student_phone
+         s.id AS student_id, s.name AS student, s."waTag" AS tag, s.phone AS student_phone,
+         b.name AS batch
   FROM "BatchStudent" bs
   JOIN "Batch" b ON b.id = bs."batchId"
   JOIN "User" t ON t.id = b."teacherId"

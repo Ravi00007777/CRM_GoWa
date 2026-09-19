@@ -40,6 +40,10 @@ async function createGroup(device, title, participants) {
   return { jid: r.group_id, missing: r.participant_status?.filter((p) => p.status !== 'success') ?? [] };
 }
 
+async function renameGroup(device, jid, name) {
+  return call('/group/name', { device, json: { group_id: jid, name } });
+}
+
 async function groupParticipants(device, jid) {
   const r = await call('/user/my/groups', { method: 'GET', device });
   const g = (r?.data ?? []).find((x) => x.JID === jid);
@@ -90,4 +94,4 @@ async function roleOfDevice(deviceId) {
   return match();
 }
 
-module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, groupParticipants };
+module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants };

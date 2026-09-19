@@ -13,7 +13,7 @@ const cfg = require('./config');
 const gowa = require('./gowa');
 const people = require('./people');
 
-const SELECT = `SELECT "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note
+const SELECT = `SELECT "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName"
   FROM "WaConversation"`;
 
 let cache = { at: 0, rows: [] };
@@ -49,17 +49,19 @@ async function createFor(pair) {
     return jid;
   };
 
-  const teacherGroup = await make(cfg.teacherDevice, `${pair.student} · ${pair.teacher}`, pair.teacher_jid);
-  const studentGroup = await make(cfg.studentDevice, `${pair.student} · AlmaEd`, pair.parent_jid);
+  // Both groups carry the batch's name, so a conversation on WhatsApp is recognisable as the
+  // same thing admin sees on the site.
+  const teacherGroup = await make(cfg.teacherDevice, pair.batch, pair.teacher_jid);
+  const studentGroup = await make(cfg.studentDevice, pair.batch, pair.parent_jid);
 
   await people.pool.query(
-    `INSERT INTO "WaConversation" (id, "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "createdAt", "updatedAt")
-     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, now(), now())
+    `INSERT INTO "WaConversation" (id, "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName", "createdAt", "updatedAt")
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, now(), now())
      ON CONFLICT ("teacherId", "studentId") DO UPDATE
        SET "teacherGroupJid" = EXCLUDED."teacherGroupJid",
            "studentGroupJid" = EXCLUDED."studentGroupJid",
-           note = EXCLUDED.note, "updatedAt" = now()`,
-    [pair.teacher_id, pair.student_id, teacherGroup, studentGroup, notes.join('; ') || null],
+           note = EXCLUDED.note, "groupName" = EXCLUDED."groupName", "updatedAt" = now()`,
+    [pair.teacher_id, pair.student_id, teacherGroup, studentGroup, notes.join('; ') || null, pair.batch],
   );
   refresh();
   return { teacherGroup, studentGroup, notes };
@@ -83,6 +85,23 @@ async function reconcile() {
       }
     } catch (err) {
       console.error(`[groups] could not set up ${pair.teacher} / ${pair.student}:`, err.message);
+    }
+    return; // one per pass
+  }
+
+  // A batch renamed on the site renames both its groups, so the two never drift apart.
+  for (const c of existing) {
+    const pair = await people.pairOf(c.teacherId, c.studentId);
+    if (!pair || !pair.batch || pair.batch === c.groupName) continue;
+    try {
+      if (c.teacherGroupJid) await gowa.renameGroup(cfg.teacherDevice, c.teacherGroupJid, pair.batch);
+      if (c.studentGroupJid) await gowa.renameGroup(cfg.studentDevice, c.studentGroupJid, pair.batch);
+      await people.pool.query('UPDATE "WaConversation" SET "groupName" = $1, "updatedAt" = now() WHERE "teacherId" = $2 AND "studentId" = $3',
+        [pair.batch, c.teacherId, c.studentId]);
+      refresh();
+      console.log(`[groups] renamed ${pair.teacher} / ${pair.student} to "${pair.batch}"`);
+    } catch (err) {
+      console.error(`[groups] rename failed for ${pair.student}:`, err.message);
     }
     return; // one per pass
   }

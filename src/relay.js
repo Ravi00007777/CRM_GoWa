@@ -228,14 +228,6 @@ async function handleWebhook(req, res) {
   if (!verifySignature(req.rawBody, req.get('X-Hub-Signature-256'))) return res.sendStatus(401);
 
   const { event, device_id: deviceId, payload: p } = req.body || {};
-  // ponytail: temporary, while the group relay is built. Groups reach the relay now that gowa
-  // no longer ignores @g.us, and a group message names its sender differently from a 1:1 one.
-  if (p) {
-    console.log('[wh]', JSON.stringify({ chat: p.chat_id, from: p.from, lid: p.from_lid,
-      participant: p.participant, sender: p.sender, pushname: p.pushname, me: p.is_from_me,
-      body: (p.body || '').slice(0, 30), keys: Object.keys(p).join(',') }));
-  }
-  // Only 1:1 chats: skip groups, status updates (status@broadcast), broadcast lists and channels (@newsletter).
   const chat = String(p?.chat_id || p?.from || '');
   const oneToOne = /@(s\.whatsapp\.net|lid)$/.test(chat);
   const isGroup = /@g\.us$/.test(chat);
