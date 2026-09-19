@@ -23,15 +23,6 @@ echo "--- swap (1 GB VMs have no headroom for an npm install)"
   fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap -q /swapfile && swapon /swapfile
   grep -q '^/swapfile' /etc/fstab || echo '/swapfile none swap sw 0 0' >> /etc/fstab
 }
-command -v caddy >/dev/null || {
-  apt-get install -y -qq debian-keyring debian-archive-keyring apt-transport-https
-  curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
-    | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  echo "deb [signed-by=/usr/share/keyrings/caddy-stable-archive-keyring.gpg] https://dl.cloudsmith.io/public/caddy/stable/deb/debian any-version main" \
-    > /etc/apt/sources.list.d/caddy-stable.list
-  apt-get update -qq && apt-get install -y -qq caddy
-}
-
 echo "--- user"
 id almaed >/dev/null 2>&1 || useradd --system --home "$APP" --shell /usr/sbin/nologin almaed
 mkdir -p "$APP/data" "$APP/backups" "$APP/gowa"
@@ -41,17 +32,15 @@ echo "--- app"
 cd "$APP"
 sudo -u almaed npm ci --omit=dev
 
-# gowa's native binary binds all interfaces, so the firewall is what keeps 3002 private.
-echo "--- firewall: ssh and https only. gowa (3002) and the app (8080) are not reachable from outside."
+# The relay serves only a webhook that gowa posts to over loopback, and a health check. Nothing
+# needs to reach it from outside, so only SSH is open and gowa's own port stays unreachable.
+echo "--- firewall: ssh only"
 ufw allow 22/tcp >/dev/null
-ufw allow 80,443/tcp >/dev/null
 ufw --force enable >/dev/null
 
 echo "--- services"
 install -m 644 "$APP/scripts/deploy/almaed.service" /etc/systemd/system/almaed.service
 install -m 644 "$APP/scripts/deploy/gowa.service" /etc/systemd/system/gowa.service
-[ -f /etc/caddy/Caddyfile.orig ] || cp /etc/caddy/Caddyfile /etc/caddy/Caddyfile.orig 2>/dev/null || true
-echo "NOTE: edit /etc/caddy/Caddyfile with your domain (template: $APP/scripts/deploy/Caddyfile)"
 systemctl daemon-reload
 systemctl enable --now gowa almaed
 
@@ -61,13 +50,14 @@ echo "0 2 * * * $APP/scripts/deploy/backup.sh" | crontab -u almaed -
 cat <<'DONE'
 
 Done. Remaining, by hand:
-  1. Put your domain in /etc/caddy/Caddyfile, then: systemctl restart caddy
-  2. Pair both numbers again on THIS machine - sessions do not move between installs:
+  1. Pair both numbers again on THIS machine - sessions do not move between installs.
+     Reach gowa through an SSH tunnel, since its port is not open:
+       ssh -L 3002:localhost:3002 <user>@<this host>
        AUTH=$(grep GOWA_BASIC_AUTH /opt/almaed/.env | cut -d= -f2)
        curl -u $AUTH -X POST localhost:3002/devices -H 'Content-Type: application/json' -d '{"device_id":"teacher"}'
        curl -u $AUTH localhost:3002/devices/teacher/login     # open qr_link, scan from the teacher phone
        curl -u $AUTH -X POST localhost:3002/devices -H 'Content-Type: application/json' -d '{"device_id":"student"}'
        curl -u $AUTH localhost:3002/devices/student/login     # scan from the student phone
        curl -u $AUTH localhost:3002/devices                   # both should say "logged_in"
-  3. Check: systemctl status gowa almaed && journalctl -u almaed -u gowa -f
+  2. Check: systemctl status gowa almaed && journalctl -u almaed -u gowa -f
 DONE

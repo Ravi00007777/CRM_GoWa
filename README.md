@@ -120,37 +120,40 @@ Open <http://localhost:8080> while `npm start` runs and sign in with `ADMIN_TOKE
 
 ## 6. Deploy to a VPS
 
-Ubuntu 24.04. It fits a 1 GB free-tier VM (Google Cloud e2-micro, Oracle Always Free), so gowa
-runs as a native binary under systemd rather than under Docker — the daemon costs more memory
-than the relay itself. `docker-compose.yml` is still there if you prefer containers on a larger
-box. Caddy terminates TLS, because the admin token travels in an `Authorization` header and must
-not cross the internet in the clear.
+Ubuntu 24.04; a 1 GB box is enough. The relay has no web interface of its own - admin lives on
+the AlmaEd site - so nothing but SSH is exposed, and gowa runs as a native binary under systemd
+rather than under Docker, whose daemon costs more memory than the relay itself.
 
 ```bash
-ssh root@<your-vps>
-git clone <this repo> /opt/almaed
-cp /opt/almaed/.env.example /opt/almaed/.env   # fill it in, new secrets, not the laptop ones
+ssh <user>@<your-vps>
+sudo -i
+apt update && apt install -y git
+git clone https://github.com/Ravi00007777/CRM_GoWa.git /opt/almaed
+cp /opt/almaed/.env.example /opt/almaed/.env   # fill it in: DATABASE_URL and fresh secrets
 sh /opt/almaed/scripts/deploy/setup.sh
 ```
 
-`setup.sh` installs Node 22 (Ubuntu's 18 is too old for better-sqlite3), Caddy and sqlite3, adds a
-1 GB swapfile, creates the `almaed` service user, opens only 22/80/443 in `ufw`, enables both
-units and adds a nightly backup. It then prints the
-two steps it cannot do for you: putting your domain in `/etc/caddy/Caddyfile`, and pairing both
-WhatsApp numbers again by QR. **Sessions do not transfer** — the pairing in `gowa/storages` on your
-laptop belongs to that install.
+`setup.sh` installs Node 22 (Ubuntu ships 18, and better-sqlite3 needs 22), adds a swapfile,
+creates the `almaed` service user, opens only port 22, enables both units and schedules a
+nightly backup. It then prints the one thing it cannot do: pairing the two WhatsApp numbers,
+which needs a QR code scanned from each phone. **Sessions do not transfer** between machines.
+
+gowa's port is not open to the internet, so reach it through a tunnel to pair:
+
+```bash
+ssh -L 3002:localhost:3002 <user>@<your-vps>
+```
+
+then open the `qr_link` from `/devices/teacher/login` in your own browser, changing its port to
+3002.
 
 | File | What it is |
 |---|---|
 | `scripts/deploy/setup.sh` | the one-shot installer above |
 | `scripts/deploy/almaed.service` | systemd unit for `src/server.js` |
-| `scripts/deploy/gowa.service` | systemd unit for gowa (native binary, no Docker) |
-| `scripts/deploy/Caddyfile` | HTTPS reverse proxy; has an IP-only fallback if you have no domain |
-| `scripts/deploy/backup.sh` | nightly `sqlite3 .backup`, 14 kept (a plain `cp` can catch WAL mid-write) |
-
-Only 22, 80 and 443 are open. gowa (3002) and the app (8080) are reachable from the machine
-itself, so Caddy is the only way in from outside. To reach gowa for pairing, tunnel it:
-`ssh -L 3002:localhost:3002 <user>@<host>`.
+| `scripts/deploy/gowa.service` | systemd unit for gowa |
+| `scripts/deploy/backup.sh` | nightly `sqlite3 .backup`, 14 kept |
+| `scripts/deploy/mac-install.sh` | the same thing under launchd, for running on a Mac |
 
 ## Who a message goes to
 
