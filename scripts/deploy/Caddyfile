@@ -1,0 +1,14 @@
+# /etc/caddy/Caddyfile
+# Caddy gets a Let's Encrypt certificate on its own. Replace the name below with your domain,
+# or use the IP form further down if you have no domain yet.
+crm.example.com {
+	reverse_proxy 127.0.0.1:8080
+}
+
+# No domain? Comment out the block above and uncomment this one. Caddy then serves its own
+# certificate, so the browser warns once and you accept it. The admin token is still encrypted
+# in transit, which plain http would not do.
+# :443 {
+# 	tls internal
+# 	reverse_proxy 127.0.0.1:8080
+# }

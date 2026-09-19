@@ -4,7 +4,8 @@ services:
     image: aldinokemal2104/go-whatsapp-web-multidevice:v9.3.1
     restart: unless-stopped
     ports:
-      - "3002:3000" # host 3002 (3000/3001 taken locally) -> container 3000
+      # Bound to loopback: gowa's API must never be reachable from the internet, only from the app.
+      - "127.0.0.1:3002:3000" # host 3002 (3000/3001 taken locally) -> container 3000
     extra_hosts:
       - "host.docker.internal:host-gateway"
     volumes:

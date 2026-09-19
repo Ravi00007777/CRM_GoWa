@@ -1,0 +1,22 @@
+# /etc/systemd/system/gowa.service - gowa as a native binary. Docker is skipped on the 1 GB
+# free-tier VM: the daemon costs more memory than the whole relay.
+[Unit]
+Description=gowa (WhatsApp multi-device bridge)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=almaed
+WorkingDirectory=/opt/almaed
+ExecStart=/bin/sh /opt/almaed/scripts/gowa.sh
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+ProtectSystem=full
+# gowa writes the paired sessions and downloaded media under gowa/.
+ReadWritePaths=/opt/almaed/gowa
+
+[Install]
+WantedBy=multi-user.target

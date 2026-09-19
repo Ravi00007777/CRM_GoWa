@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AlmaEd</title>
+<style>
+  :root { color-scheme: light dark; --bg: #f6f7f9; --card: #fff; --text: #1c2024; --muted: #6b7280; --line: #e3e6ea; --accent: #2563eb; --bad: #c2410c; --ok: #15803d; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111315; --card: #1a1d20; --text: #e8eaed; --muted: #9aa0a6; --line: #2c3035; --accent: #60a5fa; --bad: #fb923c; --ok: #4ade80; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--card); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font-size: 16px; margin: 0 12px 0 0; }
+  nav button { background: none; border: 0; padding: 6px 10px; border-radius: 6px; color: var(--muted); font: inherit; cursor: pointer; }
+  nav button[aria-current="true"] { background: var(--bg); color: var(--text); font-weight: 600; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 16px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+  label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--muted); }
+  input, select { font: inherit; padding: 7px 9px; border: 1px solid var(--line); border-radius: 6px; background: var(--bg); color: var(--text); min-width: 150px; height: 36px; }
+  input[type=checkbox] { height: auto; }
+  button.primary { font: inherit; padding: 8px 14px; border: 0; border-radius: 6px; background: var(--accent); color: #fff; cursor: pointer; }
+  button.link { background: none; border: 0; color: var(--accent); cursor: pointer; font: inherit; padding: 0; }
+  .scroll { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 12px; color: var(--muted); font-weight: 500; }
+  .bad { color: var(--bad); } .ok { color: var(--ok); } .muted { color: var(--muted); }
+  .msg { color: var(--bad); min-height: 1.4em; margin: 8px 0 0; }
+  .chat { max-height: 420px; overflow-y: auto; }
+  .chat p { margin: 0 0 8px; padding: 8px 10px; border-radius: 8px; background: var(--bg); max-width: 80%; white-space: pre-wrap; }
+  .chat p.t { margin-left: auto; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>AlmaEd</h1>
+  <nav id="nav" hidden>
+    <button data-view="classes" aria-current="true">Classes</button>
+    <button data-view="teachers">Teachers</button>
+    <button data-view="students">Students</button>
+  </nav>
+</header>
+<main>
+  <section id="login" hidden>
+    <h2>Sign in</h2>
+    <form id="loginForm">
+      <label>Admin token (ADMIN_TOKEN in .env)<input name="token" type="password" required autocomplete="current-password"></label>
+      <button class="primary">Sign in</button>
+    </form>
+    <p class="msg" id="loginMsg"></p>
+  </section>
+
+  <div id="classes" data-panel hidden>
+    <section>
+      <h2>Schedule a class</h2>
+      <form data-post="classes">
+        <label>Student (with their teacher)<select name="student_id" required></select></label>
+        <label>Date<input name="date" type="date" min="2020-01-01" max="9999-12-31" required></label>
+        <label>Time (IST)<select name="time" required style="min-width:110px"></select></label>
+        <label>Meet link<input name="meet_link" type="url" placeholder="optional"></label>
+        <button class="primary">Add class</button>
+      </form>
+      <p class="msg"></p>
+    </section>
+    <section>
+      <h2>Classes <label style="display:inline-flex;flex-direction:row;gap:6px;margin-left:12px"><input type="checkbox" id="followOnly" style="min-width:0"> needs follow-up only</label></h2>
+      <div class="scroll"><table id="classTable"></table></div>
+    </section>
+  </div>
+
+  <div id="teachers" data-panel hidden>
+    <section>
+      <h2>Add teacher</h2>
+      <form data-post="teachers">
+        <label>Name<input name="name" required></label>
+        <label>WhatsApp number<input name="phone" type="tel" placeholder="+91 98765 43210" required></label>
+        <label>Payout email<input name="payout_email" type="email"></label>
+        <button class="primary">Add teacher</button>
+      </form>
+      <p class="msg"></p>
+    </section>
+    <section><div class="scroll"><table id="teacherTable"></table></div><p class="msg" id="teacherMsg"></p></section>
+  </div>
+
+  <div id="students" data-panel hidden>
+    <section>
+      <h2>Add student</h2>
+      <form data-post="students">
+        <label>Student name<input name="name" required></label>
+        <label>Tag<input name="tag" placeholder="auto: first name" style="min-width:110px;width:110px"></label>
+        <label>Grade<input name="grade" style="min-width:70px;width:70px"></label>
+        <label>Teacher<select name="teacher_id"></select></label>
+        <label>Parent WhatsApp number<input name="parent_phone" type="tel" placeholder="+91 87654 32109" required></label>
+        <label>Parent name<input name="parent_name"></label>
+        <label>Parent payment email<input name="parent_payment_email" type="email"></label>
+        <button class="primary">Add student</button>
+      </form>
+      <p class="msg"></p>
+      <p class="muted">Siblings: enter the same parent number. Teachers and parents type <b>#tag</b> to pick a student when they have more than one, or swipe-reply to a message.</p>
+    </section>
+    <section><div class="scroll"><table id="studentTable"></table></div><p class="msg" id="studentMsg"></p></section>
+  </div>
+  <section id="chatBox" hidden>
+    <h2 id="chatTitle"></h2>
+    <div class="chat" id="chat"></div>
+  </section>
+</main>
+
+<script>
+const $ = (s) => document.querySelector(s);
+let token = '';
+try { token = localStorage.getItem('crmToken') || ''; } catch {}
+
+async function api(path, opts = {}) {
+  const res = await fetch('/admin/' + path, {
+    ...opts,
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+  });
+  if (res.status === 401) { signOut(); throw new Error('Wrong token'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || 'Request failed (' + res.status + ')');
+  return data;
+}
+
+const fmt = (iso) => iso ? new Date(iso).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', dateStyle: 'medium', timeStyle: 'short' }) : '';
+const phone = (jid) => '+' + String(jid).split('@')[0];
+
+// Builds a table from rows; cells are text (safe) or DOM nodes.
+function table(el, head, rows) {
+  el.replaceChildren();
+  const tr = (cells, tag) => {
+    const r = document.createElement('tr');
+    for (const c of cells) {
+      const d = document.createElement(tag);
+      c instanceof Node ? d.append(c) : (d.textContent = c ?? '');
+      r.append(d);
+    }
+    return r;
+  };
+  el.append(tr(head, 'th'), ...rows.map((r) => tr(r, 'td')));
+  if (!rows.length) el.append(tr(['Nothing yet'], 'td'));
+}
+
+function status(sent, due, count) {
+  const s = document.createElement('span');
+  if (sent) { s.className = 'ok'; s.textContent = 'Sent ' + fmt(sent); }
+  else if (due && Date.parse(due) < Date.now()) { s.className = 'bad'; s.textContent = 'Overdue' + (count ? ` (${count} reminder${count > 1 ? 's' : ''})` : ''); }
+  else { s.className = 'muted'; s.textContent = due ? 'Due ' + fmt(due) : ''; }
+  return s;
+}
+
+function button(text, onClick) {
+  const b = document.createElement('button');
+  b.className = 'link'; b.textContent = text; b.onclick = onClick;
+  return b;
+}
+
+// Saves on blur or Enter, not on every keystroke.
+function field(value, width, save) {
+  const i = Object.assign(document.createElement('input'), { value: value ?? '', style: `min-width:0;width:${width}px` });
+  i.onchange = () => save(i.value);
+  return i;
+}
+
+// Two clicks instead of confirm(): a modal dialog blocks the page and there is nothing to
+// undo a delete with.
+function danger(text, run) {
+  const b = button(text, () => {
+    if (b.dataset.armed) return run();
+    b.dataset.armed = '1'; b.textContent = 'Sure?'; b.style.color = 'var(--bad)';
+    setTimeout(() => { delete b.dataset.armed; b.textContent = text; b.style.color = ''; }, 4000);
+  });
+  return b;
+}
+
+async function save(msgEl, fn) {
+  $(msgEl).textContent = '';
+  try { await fn(); } catch (err) { $(msgEl).textContent = err.message; }
+  await reload();
+}
+
+let teachers = [];
+const patchTeacher = (t, body) => save('#teacherMsg', () => api('teachers/' + t.id, { method: 'PATCH', body: JSON.stringify(body) }));
+
+async function loadTeachers() {
+  teachers = await api('teachers');
+  table($('#teacherTable'), ['ID', 'Name', 'WhatsApp', 'Payout email', 'Students', ''], teachers.map((t) => [
+    t.id,
+    field(t.name, 130, (v) => patchTeacher(t, { name: v })),
+    field(phone(t.wa_jid), 140, (v) => patchTeacher(t, { phone: v })),
+    field(t.payout_email, 170, (v) => patchTeacher(t, { payout_email: v })),
+    t.students,
+    danger('Delete', () => save('#teacherMsg', () => api('teachers/' + t.id, { method: 'DELETE' }))),
+  ]));
+  $('#students [name=teacher_id]').replaceChildren(new Option('Not assigned', ''), ...teachers.map((t) => new Option(t.name, t.id)));
+}
+
+async function patchStudent(s, body) {
+  $('#studentMsg').textContent = '';
+  try { await api('students/' + s.id, { method: 'PATCH', body: JSON.stringify(body) }); }
+  catch (err) { $('#studentMsg').textContent = err.message; }
+  await reload();
+}
+
+const patchParent = (s, body) => save('#studentMsg', () => api('parents/' + s.parent_id, { method: 'PATCH', body: JSON.stringify(body) }));
+
+async function loadStudents() {
+  const rows = await api('students');
+  table($('#studentTable'), ['ID', 'Student', 'Tag', 'Grade', 'Teacher', 'Parent name', 'Parent WhatsApp', '', ''], rows.map((s) => {
+    const pick = document.createElement('select');
+    pick.append(new Option('Not assigned', ''), ...teachers.map((t) => new Option(t.name, t.id)));
+    pick.value = s.teacher_id ?? '';
+    pick.onchange = () => patchStudent(s, { teacher_id: pick.value || null });
+    return [
+      s.id,
+      field(s.name, 120, (v) => patchStudent(s, { name: v })),
+      field(s.tag, 90, (v) => patchStudent(s, { tag: v })),
+      field(s.grade, 55, (v) => patchStudent(s, { grade: v })),
+      pick,
+      // Siblings share one parent record, so this edits the contact for all of them.
+      field(s.parent_name, 110, (v) => patchParent(s, { name: v })),
+      field(phone(s.parent_wa_jid), 140, (v) => patchParent(s, { phone: v })),
+      button('Messages', () => showChat(s)),
+      danger('Delete', () => save('#studentMsg', () => api('students/' + s.id, { method: 'DELETE' }))),
+    ];
+  }));
+  $('#classes [name=student_id]').replaceChildren(...rows.filter((s) => s.teacher_id)
+    .map((s) => new Option(`${s.name} (#${s.tag}) with ${s.teacher}`, s.id)));
+}
+
+async function loadClasses() {
+  const rows = await api('classes' + ($('#followOnly').checked ? '?needs_followup=1' : ''));
+  table($('#classTable'), ['ID', 'Time', 'Teacher', 'Student', 'Notes', 'Test result', 'Follow-up'], rows.map((c) => [
+    c.id, fmt(c.held_at), c.teacher, `${c.student} (#${c.tag})`,
+    status(c.notes_sent_at, c.notes_due_at, c.reminder_count),
+    status(c.test_result_sent_at, c.test_result_due_at, c.test_reminder_count),
+    c.needs_followup ? button('Mark done', async () => { await api('classes/' + c.id, { method: 'PATCH', body: JSON.stringify({ needs_followup: 0 }) }); loadClasses(); }) : '',
+  ]));
+}
+
+async function reload() {
+  await loadTeachers();
+  await Promise.all([loadStudents(), loadClasses()]);
+}
+
+async function showChat(s) {
+  const msgs = await api(`students/${s.id}/messages`);
+  $('#chatTitle').textContent = `Messages: ${s.name} (#${s.tag})`;
+  $('#chat').replaceChildren(...(msgs.length ? msgs.map((m) => {
+    const p = document.createElement('p');
+    const fromTeacher = m.direction === 'teacher_to_student';
+    p.className = fromTeacher ? 't' : '';
+    p.textContent = `${fromTeacher ? 'Teacher ' + m.teacher : 'Parent of ' + s.name} · ${fmt(m.sent_at)}${m.status === 'relayed' ? '' : ' · ' + m.status}\n${m.content || ''}`;
+    return p;
+  }) : [Object.assign(document.createElement('p'), { textContent: 'No messages yet' })]));
+  $('#chatBox').hidden = false;
+  $('#chatBox').scrollIntoView({ behavior: 'smooth' });
+}
+
+function show(view) {
+  for (const p of document.querySelectorAll('[data-panel]')) p.hidden = p.id !== view;
+  $('#chatBox').hidden = true;
+  for (const b of document.querySelectorAll('nav button')) b.setAttribute('aria-current', b.dataset.view === view);
+}
+
+async function start() {
+  await reload();
+  $('#login').hidden = true; $('#nav').hidden = false; show('classes');
+}
+
+function signOut() {
+  token = '';
+  try { localStorage.removeItem('crmToken'); } catch {}
+  $('#nav').hidden = true;
+  for (const p of document.querySelectorAll('[data-panel]')) p.hidden = true;
+  $('#chatBox').hidden = true;
+  $('#login').hidden = false;
+}
+
+$('#loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  token = e.target.token.value.trim();
+  try {
+    await start();
+    try { localStorage.setItem('crmToken', token); } catch {}
+  } catch (err) { $('#loginMsg').textContent = err.message; }
+};
+
+for (const form of document.querySelectorAll('form[data-post]')) {
+  form.onsubmit = async (e) => {
+    e.preventDefault();
+    const msg = form.nextElementSibling;
+    const body = Object.fromEntries([...new FormData(form)].filter(([, v]) => v !== ''));
+    if (body.date) { // date + time are entered in IST
+      body.held_at = `${body.date}T${body.time}:00+05:30`;
+      delete body.date; delete body.time;
+    }
+    try {
+      await api(form.dataset.post, { method: 'POST', body: JSON.stringify(body) });
+      msg.textContent = '';
+      form.reset();
+      await reload();
+    } catch (err) { msg.textContent = err.message; }
+  };
+}
+
+// Time dropdown: 6:00 AM to 11:45 PM in 15-minute steps.
+$('[name=time]').replaceChildren(new Option('Select time', ''), ...Array.from({ length: 72 }, (_, i) => {
+  const h = 6 + Math.floor(i / 4), m = String((i % 4) * 15).padStart(2, '0');
+  return new Option(`${(h + 11) % 12 + 1}:${m} ${h < 12 ? 'AM' : 'PM'}`, `${String(h).padStart(2, '0')}:${m}`);
+}));
+
+$('#nav').onclick = (e) => e.target.dataset.view && show(e.target.dataset.view);
+$('#followOnly').onchange = loadClasses;
+setInterval(() => token && !$('#classes').hidden && loadClasses().catch(() => {}), 60e3);
+
+token ? start().catch(signOut) : signOut();
+</script>
+</body>
+</html>
