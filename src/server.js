@@ -2,6 +2,7 @@ const express = require('express');
 const cfg = require('./config');
 const { handleWebhook } = require('./relay');
 const groups = require('./groups');
+const outbox = require('./outbox');
 
 const app = express();
 
@@ -13,3 +14,5 @@ app.get('/health', (_req, res) => res.json({ ok: true }));
 app.listen(cfg.port, () => console.log(`AlmaEd WhatsApp relay listening on :${cfg.port}`));
 // Creates the WhatsApp groups for any pair added on the AlmaEd site that has none yet.
 groups.start();
+// Sends what teachers write on the AlmaEd site to the students' WhatsApp groups.
+outbox.start();

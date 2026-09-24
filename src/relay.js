@@ -89,7 +89,6 @@ async function relayGroup(chatJid, p) {
   const ownDevice = side.isTeacher ? cfg.teacherDevice : cfg.studentDevice;
   const otherDevice = side.isTeacher ? cfg.studentDevice : cfg.teacherDevice;
   const to = side.isTeacher ? side.studentGroupJid : side.teacherGroupJid;
-  if (!to) return console.error(`[groups] ${chatJid} has no counterpart group yet`);
 
   const reply = (text) => gowa.sendText(ownDevice, chatJid, text);
   const direction = side.isTeacher ? 'TEACHER_TO_STUDENT' : 'STUDENT_TO_TEACHER';
@@ -100,6 +99,14 @@ async function relayGroup(chatJid, p) {
 
   const m = classify(p);
   if (m.kind === 'ignore') return;
+
+  // Teachers write on the AlmaEd site (doubt chat and resources), which the outbox sends
+  // on; their group only shows what students send.
+  if (side.isTeacher) {
+    log('[teacher wrote in the WhatsApp group; not relayed]', 'DROPPED');
+    return reply('Please send messages and assignments from the AlmaEd website. Messages typed here are not passed on.');
+  }
+
   if (m.kind === 'contact') {
     log('[contact card dropped]', 'DROPPED');
     return reply('Contact cards are not relayed. Please send the details as text.');
@@ -123,6 +130,16 @@ async function relayGroup(chatJid, p) {
     ? `Teacher ${pair.teacher}${isResult ? ' - Test result' : ''}`
     : `Student ${pair.student}`;
   const out = text.trim() ? `${label}:\n${text}` : label;
+
+  // The teacher reads and answers on the site, so the doubt thread gets the message first;
+  // the copy in the teacher's WhatsApp group is only a phone notification.
+  if (!side.isTeacher) {
+    await people.saveDoubt({
+      batchId: pair.batch_id, studentId: side.studentId, waMessageId: p.id,
+      body: m.kind === 'document' ? `${text}\n[sent a document on WhatsApp]`.trim() : text,
+    }).catch((err) => console.error('[relay] saving doubt failed:', err.message));
+  }
+  if (!to) return console.error(`[groups] ${chatJid} has no counterpart group yet`);
 
   let sent;
   if (m.kind === 'document') {

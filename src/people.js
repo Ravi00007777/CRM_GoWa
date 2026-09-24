@@ -14,7 +14,7 @@ const pool = new Pool({ connectionString: cfg.databaseUrl, ssl: { rejectUnauthor
 const DIRECTORY = `
   SELECT t.id AS teacher_id, t.name AS teacher, t.phone AS teacher_phone,
          s.id AS student_id, s.name AS student, s."waTag" AS tag, s.phone AS student_phone,
-         b.name AS batch
+         b.id AS batch_id, b.name AS batch
   FROM "BatchStudent" bs
   JOIN "Batch" b ON b.id = bs."batchId"
   JOIN "User" t ON t.id = b."teacherId"
@@ -91,6 +91,16 @@ async function log({ teacherId, studentId, direction, waMessageId, outMessageId,
   await pool.query(INSERT, [teacherId, studentId, direction, waMessageId || null, outMessageId || null, content, status]);
 }
 
+// A student's WhatsApp message, saved into the doubt thread the teacher reads on the site.
+// The inbound id is unique there too, so a webhook retry does not add it twice.
+async function saveDoubt({ batchId, studentId, body, waMessageId }) {
+  await pool.query(
+    `INSERT INTO "DoubtMessage" (id, "batchId", "studentId", "senderId", body, "waMessageId", "createdAt")
+     VALUES (gen_random_uuid()::text, $1, $2, $2, $3, $4, now())
+     ON CONFLICT ("waMessageId") DO NOTHING`,
+    [batchId, studentId, body, waMessageId]);
+}
+
 // Which conversation an earlier relayed message belonged to, for swipe-replies. Either copy
 // of the message resolves to the same pair.
 async function pairOfMessage(waId) {
@@ -101,4 +111,4 @@ async function pairOfMessage(waId) {
 
 const seen = async (waId) => (await pool.query('SELECT 1 FROM "WaMessage" WHERE "waMessageId" = $1', [waId])).rowCount > 0;
 
-module.exports = { directory, pairOf, studentsOfTeacher, childrenOfParent, findTeacher, findParent, log, pairOfMessage, seen, refresh, pool };
+module.exports = { directory, pairOf, studentsOfTeacher, childrenOfParent, findTeacher, findParent, log, saveDoubt, pairOfMessage, seen, refresh, pool };
