@@ -61,12 +61,19 @@ async function sendDoubt(row) {
   await log(row, body, 'RELAYED', sent?.message_id || null);
 }
 
+// Teachers share files as Google Drive links; only older resources are files in AlmaEd's storage.
+const isDriveLink = (url) => /^https:\/\/(?:drive|docs)\.google\.com\//.test(url);
+
 async function sendResource(row) {
   if (!(await claim('Resource', row.id))) return;
-  const res = await fetch(row.fileUrl);
-  if (!res.ok) throw new Error(`download ${row.fileUrl} -> HTTP ${res.status}`);
-  const file = Buffer.from(await res.arrayBuffer());
-  const ext = path.extname(new URL(row.fileUrl).pathname) || '.pdf';
+  let file = null;
+  let ext = '';
+  if (!isDriveLink(row.fileUrl)) {
+    const res = await fetch(row.fileUrl);
+    if (!res.ok) throw new Error(`download ${row.fileUrl} -> HTTP ${res.status}`);
+    file = Buffer.from(await res.arrayBuffer());
+    ext = path.extname(new URL(row.fileUrl).pathname) || '.pdf';
+  }
   const due = row.dueAt ? `\nDue: ${new Date(row.dueAt).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST` : '';
   const { text: title } = redact(row.title);
   const caption = `Teacher ${row.teacher} - new ${String(row.type).toLowerCase()}: ${title}${due}`;
@@ -74,7 +81,9 @@ async function sendResource(row) {
   const { rows } = await q(GROUPS_OF_RESOURCE, [row.id]);
   for (const g of rows) {
     try {
-      const sent = await gowa.sendFile(cfg.studentDevice, g.studentGroupJid, file, `${title}${ext}`, caption);
+      const sent = file
+        ? await gowa.sendFile(cfg.studentDevice, g.studentGroupJid, file, `${title}${ext}`, caption)
+        : await gowa.sendText(cfg.studentDevice, g.studentGroupJid, `${caption}\n${row.fileUrl}`);
       await log({ ...row, studentId: g.studentId }, caption, 'RELAYED', sent?.message_id || null);
     } catch (err) {
       console.error(`[outbox] resource ${row.id} to ${g.studentGroupJid} failed:`, err.message);

@@ -66,3 +66,29 @@ test('a message that is only a phone number is not sent, and is not retried', as
   assert.equal(doubts[0].waMessageId, 'skipped:d2');
   assert.equal(logged[0].status, 'FLAGGED');
 });
+
+test('a Google Drive resource goes to every student group as its link, not a download', async () => {
+  const resources = [{ id: 'r1', title: 'Chapter 4', type: 'ASSIGNMENT', fileUrl: 'https://drive.google.com/file/d/abc/view', dueAt: null, teacherId: 't1', teacher: 'Vishwas', waMessageId: null }];
+  const realQuery = people.pool.query;
+  people.pool.query = async (sql, args = []) => {
+    if (sql.includes('FROM "Resource" r JOIN')) return { rows: resources.filter((r) => r.waMessageId === null) };
+    if (sql.includes('WHERE r.id = $1')) return { rows: [{ studentId: 's1', studentGroupJid: GROUP }] };
+    if (sql.startsWith('UPDATE "Resource"')) {
+      const r = resources.find((x) => x.id === args[0] && (x.waMessageId === null || !sql.includes('IS NULL')));
+      if (r) r.waMessageId = args[1];
+      return { rowCount: r ? 1 : 0 };
+    }
+    return realQuery(sql, args);
+  };
+  try {
+    await outbox.flush();
+    await outbox.flush();
+  } finally {
+    people.pool.query = realQuery;
+  }
+
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].url, 'http://gowa.test/send/message');
+  assert.equal(sent[0].body.message, 'Teacher Vishwas - new assignment: Chapter 4\nhttps://drive.google.com/file/d/abc/view');
+  assert.equal(resources[0].waMessageId, 'sent:r1');
+});
