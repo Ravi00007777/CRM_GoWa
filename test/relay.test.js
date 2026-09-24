@@ -22,6 +22,7 @@ const S2 = '917777777777@s.whatsapp.net'; // Rohan's parent
 
 let pairs = [];
 let logged = [];
+let doubts = [];
 const user = (j) => String(j).split('@')[0].split(':')[0];
 Object.assign(people, {
   studentsOfTeacher: async (jid) => pairs.filter((p) => user(p.teacher_jid) === user(jid)),
@@ -35,6 +36,7 @@ Object.assign(people, {
     return hit && { id: hit.student_id, name: hit.student, wa_jid: hit.parent_jid };
   },
   log: async (row) => { logged.push(row); },
+  saveDoubt: async (row) => { doubts.push(row); },
   pairOfMessage: async (id) => {
     const row = logged.find((l) => l.waMessageId === id || l.outMessageId === id);
     return row && { teacher_id: row.teacherId, student_id: row.studentId };
@@ -43,7 +45,14 @@ Object.assign(people, {
   refresh: () => {},
 });
 
-const { relay, verifySignature } = require('../src/relay');
+// Group membership comes from WaConversation; stubbed like the directory.
+const groups = require('../src/groups');
+const TEACHER_GROUP = '120363000000000001@g.us';
+const STUDENT_GROUP = '120363000000000002@g.us';
+groups.sideOfGroup = async (jid) => ({ teacherId: 't1', studentId: 's1', isTeacher: jid === TEACHER_GROUP });
+people.pairOf = async (t, st) => pairs.find((x) => x.teacher_id === t && x.student_id === st);
+
+const { relay, verifySignature, handleWebhook } = require('../src/relay');
 
 const sent = [];
 global.fetch = async (url, opts = {}) => {
@@ -58,11 +67,12 @@ global.fetch = async (url, opts = {}) => {
 };
 
 const pair = (teacher_id, teacher, teacher_jid, student_id, student, tag, parent_jid) =>
-  ({ teacher_id, teacher, teacher_jid, student_id, student, tag, parent_jid });
+  ({ teacher_id, teacher, teacher_jid, student_id, student, tag, parent_jid, batch_id: `b-${teacher_id}` });
 
 function reset(...rows) {
   pairs = rows;
   logged = [];
+  doubts = [];
   sent.length = 0;
 }
 const msg = () => sent.at(-1).body;
@@ -94,101 +104,79 @@ test('HMAC signature', () => {
   assert.equal(verifySignature(raw, sig.replace(/.$/, '0')), false);
 });
 
-test('teacher text -> redacted, sent via STUDENT device to the parent number', async () => {
+test('a teacher on WhatsApp is pointed to the website; nothing is relayed or saved', async () => {
   reset(ASHA_DIYA);
-  await relay('911111111111@s.whatsapp.net', { id: 'm1', from: T, body: 'my number 98765 43210, email me x@y.com' });
+  await relay('911111111111@s.whatsapp.net', { id: 'm1', from: T, body: '#diya homework?' });
   assert.equal(sent.length, 1);
-  assert.equal(sent[0].device, 'student');
-  assert.equal(msg().phone, S);
-  assert.equal(msg().message, 'Teacher Asha (for Diya):\nmy number [number removed], email me [email removed]');
-  assert.equal(logged.at(-1).status, 'RELAYED');
-  assert.equal(logged.at(-1).direction, 'TEACHER_TO_STUDENT');
+  assert.deepEqual([sent[0].device, msg().phone], ['teacher', T]);
+  assert.match(msg().message, /from the AlmaEd website/);
+  assert.equal(doubts.length, 0);
 });
 
-test('student (LID sender, phone in from_lid) -> teacher device', async () => {
+test('a parent message is saved to the doubt thread, redacted, and not sent on', async () => {
   reset(ASHA_DIYA);
-  await relay('912222222222@s.whatsapp.net', { id: 'm2', from: '251556368777322@lid', from_lid: S, body: 'ok' });
-  assert.equal(sent[0].device, 'teacher');
-  assert.equal(msg().phone, T);
-  assert.equal(logged.at(-1).direction, 'STUDENT_TO_TEACHER');
+  await relay('912222222222@s.whatsapp.net', { id: 'm2', from: '251556368777322@lid', from_lid: S, body: 'done, call 98765 43210' });
+  assert.equal(sent.length, 0);
+  assert.deepEqual(doubts, [{ batchId: 'b-t1', studentId: 's1', body: 'done, call [number removed]', waMessageId: 'm2' }]);
+  assert.deepEqual([logged.at(-1).direction, logged.at(-1).status], ['STUDENT_TO_TEACHER', 'RELAYED']);
 });
 
 test('unknown sender: ignored, nothing sent, nothing logged', async () => {
   reset(ASHA_DIYA);
-  await relay('teacher', { id: 'u1', from: '915555555555@s.whatsapp.net', body: 'hi' });
+  await relay('student', { id: 'u1', from: '915555555555@s.whatsapp.net', body: 'hi' });
   assert.equal(sent.length, 0);
   assert.equal(logged.length, 0);
 });
 
-test('contact details are held back; media is dropped and the sender is told', async () => {
+test('contact details, contact cards and files are held back and the parent is told', async () => {
   reset(ASHA_DIYA);
-  await relay('teacher', { id: 'm3', from: T, body: '+91 98765 43210' });
-  await relay('teacher', { id: 'm4', from: T, contact: { vcard: 'BEGIN:VCARD' } });
-  await relay('teacher', { id: 'm5', from: T, image: 'statics/media/x.jpg' });
+  await relay('student', { id: 'm3', from: S, body: '+91 98765 43210' });
+  await relay('student', { id: 'm4', from: S, contact: { vcard: 'BEGIN:VCARD' } });
+  await relay('student', { id: 'm5', from: S, document: { path: 'statics/media/n/1.pdf' } });
   assert.deepEqual(logged.map((l) => l.status), ['FLAGGED', 'DROPPED', 'DROPPED']);
-  assert.deepEqual(sent.map((s) => s.body.phone), [T, T]); // both nudges go back to the sender
-  assert.match(sent[0].body.message, /Contact cards are not relayed/);
+  assert.match(sent.at(-1).body.message, /Google Drive/);
+  assert.equal(doubts.length, 0);
 });
 
-test('documents are relayed under the tag, never the original filename', async () => {
-  reset(ASHA_DIYA);
-  await relay('teacher', { id: 'm6', from: T, document: { path: 'statics/media/n/1-Asha_9876543210.pdf', caption: 'notes' } });
-  assert.equal(sent[0].device, 'student');
-  assert.equal(msg().file.name, 'diya.pdf');
-});
-
-test('#result is relayed as a test result', async () => {
-  reset(ASHA_DIYA);
-  await relay('teacher', { id: 'm7', from: T, body: '#result 42/50, great work' });
-  assert.equal(msg().message, 'Teacher Asha (for Diya) - Test result:\n42/50, great work');
-});
-
-test('one teacher, several students: #tag, swipe-reply, ask when unclear', async () => {
-  reset(ASHA_DIYA, ASHA_ROHAN, RAVI_KABIR);
-
-  // No tag and more than one student -> asked, nothing relayed
-  await relay('teacher', { id: 'r1', from: T, body: 'homework done?' });
-  assert.equal(msg().phone, T);
-  assert.equal(msg().message, 'Which student? Start your message with #diya or #rohan.');
-
-  // #tag routes and is stripped; case does not matter
-  await relay('teacher', { id: 'r2', from: T, body: '#Rohan homework done?' });
-  assert.deepEqual([sent.at(-1).device, msg().phone, msg().message],
-    ['student', S2, 'Teacher Asha (for Rohan):\nhomework done?']);
-
-  // Swipe-reply to the relayed copy resolves to the same conversation
-  const out = logged.at(-1).outMessageId;
-  await relay('student', { id: 'r3', from: S2, body: 'yes', replied_to_id: out });
-  assert.deepEqual([msg().phone, msg().message], [T, 'Student Rohan (#rohan):\nyes']);
-
-  // Unknown tag refused; #list answers
-  await relay('teacher', { id: 'r5', from: T, body: '#kabir hi' });
-  assert.equal(msg().message, 'No student has the tag #kabir. Use #diya or #rohan.');
-  await relay('teacher', { id: 'r6', from: T, body: '#list' });
-  assert.equal(msg().message, 'Your students:\n#diya Diya\n#rohan Rohan');
-});
-
-test('a parent with two children picks between them', async () => {
+test('a parent with two children picks between them by #tag', async () => {
   reset(ASHA_DIYA, RAVI_KABIR);
   await relay('student', { id: 'r7', from: S, body: 'test done' });
   assert.equal(msg().message, 'Which child? Start your message with #diya or #kabir.');
-  await relay('student', { id: 'r8', from: S, body: '#kabir test done' });
-  assert.deepEqual([sent.at(-1).device, msg().phone, msg().message], ['teacher', R, 'Student Kabir (#kabir):\ntest done']);
+  await relay('student', { id: 'r8', from: S, body: '#Kabir test done' });
+  assert.deepEqual(doubts, [{ batchId: 'b-t2', studentId: 's3', body: 'test done', waMessageId: 'r8' }]);
+  await relay('student', { id: 'r9', from: S, body: '#list' });
+  assert.equal(msg().message, 'Your children:\n#diya Diya (teacher Asha)\n#kabir Kabir (teacher Ravi)');
 });
 
-test('an ended assignment refuses instead of rerouting to the remaining student', async () => {
-  reset(ASHA_DIYA, ASHA_ROHAN);
-  await relay('teacher', { id: 'e1', from: T, body: '#rohan one' });
-  const out = logged.at(-1).outMessageId;
-  reset(ASHA_DIYA); // Rohan moved to another teacher in AlmaEd
-  logged.push({ teacherId: 't1', studentId: 's2', waMessageId: 'e1', outMessageId: out });
-  await relay('teacher', { id: 'e2', from: T, body: 'one more thing', replied_to_id: out });
-  assert.deepEqual([msg().phone, msg().message], [T, 'That conversation has ended, so your message was not sent.']);
+test('a duplicate tag refuses rather than saving to the wrong thread', async () => {
+  reset(ASHA_DIYA, pair('t2', 'Ravi', R, 's9', 'Divya', 'diya', S));
+  await relay('student', { id: 'd1', from: S, body: '#diya hello' });
+  assert.match(msg().message, /More than one child has the tag #diya/);
+  assert.equal(doubts.length, 0);
 });
 
-test('a duplicate tag refuses rather than delivering to the wrong parent', async () => {
-  reset(ASHA_DIYA, pair('t1', 'Asha', T, 's9', 'Divya', 'diya', S2));
-  await relay('teacher', { id: 'd1', from: T, body: '#diya hello' });
-  assert.equal(msg().phone, T);
-  assert.match(msg().message, /More than one student has the tag #diya/);
+async function groupMessage(chat, payload) {
+  const req = { body: { event: 'message', device_id: 'x', payload: { chat_id: chat, ...payload } }, rawBody: null, get: () => '' };
+  req.rawBody = Buffer.from(JSON.stringify(req.body));
+  req.get = () => 'sha256=' + crypto.createHmac('sha256', 's3cret').update(req.rawBody).digest('hex');
+  let status;
+  await handleWebhook(req, { sendStatus: (c) => { status = c; } });
+  return status;
+}
+
+test('student group: the parent\'s message goes to the doubt thread; others in the group are ignored', async () => {
+  reset(ASHA_DIYA);
+  assert.equal(await groupMessage(STUDENT_GROUP, { id: 'g1', participant: S, body: 'what is q3?' }), 200);
+  assert.deepEqual(doubts, [{ batchId: 'b-t1', studentId: 's1', body: 'what is q3?', waMessageId: 'g1' }]);
+  await groupMessage(STUDENT_GROUP, { id: 'g2', participant: '910000000000@s.whatsapp.net', body: 'admin note' });
+  assert.equal(doubts.length, 1);
+  assert.equal(sent.length, 0);
+});
+
+test('an old teacher group: the teacher is pointed to the website, nothing is saved', async () => {
+  reset(ASHA_DIYA);
+  await groupMessage(TEACHER_GROUP, { id: 'g3', participant: T, body: 'hello' });
+  assert.equal(doubts.length, 0);
+  assert.deepEqual([sent[0].device, msg().phone], ['teacher', TEACHER_GROUP]);
+  assert.match(msg().message, /from the AlmaEd website/);
 });

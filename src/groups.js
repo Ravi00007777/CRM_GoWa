@@ -1,10 +1,10 @@
-// Each teacher-student conversation is carried by two WhatsApp groups: the teacher, the admin
-// and the teacher-facing number in one; the student, the admin and the student-facing number in
-// the other. The teacher and the student are never in the same group, so neither sees the
-// other's number, while the admin reads both sides live.
+// Each teacher-student conversation has one WhatsApp group: the student (parent), the admin and
+// the student-facing number. The teacher is never in it and works only on the AlmaEd site: what
+// they write there is posted here by the outbox, and what the student writes here lands in the
+// site's doubt thread. So the student never sees the teacher's number, and the admin reads along.
 //
-// The group is the conversation, so nothing has to be tagged: a message arriving in a known
-// group already says who it is from and who it is for.
+// Pairs set up earlier also have a teacher group (teacherGroupJid); it is left in place, but
+// nothing a teacher types there is relayed any more.
 //
 // AlmaEd cannot create these itself - once deployed it has no route to gowa, which holds the
 // WhatsApp session on a machine at home - so the relay reconciles instead: it looks for pairs
@@ -38,7 +38,7 @@ async function sideOfGroup(jid) {
 
 const adminJid = () => cfg.adminJid;
 
-// Creates the two groups for one pair. Anyone WhatsApp refuses to add - their "who can add me
+// Creates the student group for one pair. Anyone WhatsApp refuses to add - their "who can add me
 // to groups" setting - is recorded rather than swallowed, because the group otherwise looks
 // fine and simply never reaches them.
 async function createFor(pair) {
@@ -49,9 +49,8 @@ async function createFor(pair) {
     return jid;
   };
 
-  // Both groups carry the batch's name, so a conversation on WhatsApp is recognisable as the
-  // same thing admin sees on the site.
-  const teacherGroup = await make(cfg.teacherDevice, pair.batch, pair.teacher_jid);
+  // The group carries the batch's name, so it is recognisable as what admin sees on the site.
+  const teacherGroup = null;
   const studentGroup = await make(cfg.studentDevice, pair.batch, pair.parent_jid);
 
   await people.pool.query(
@@ -77,8 +76,8 @@ async function reconcile() {
   for (const pair of await people.directory()) {
     if (has.has(`${pair.teacher_id}:${pair.student_id}`)) continue;
     try {
-      const { teacherGroup, studentGroup, notes } = await createFor(pair);
-      console.log(`[groups] ${pair.teacher} / ${pair.student}: ${teacherGroup} + ${studentGroup}`);
+      const { studentGroup, notes } = await createFor(pair);
+      console.log(`[groups] ${pair.teacher} / ${pair.student}: ${studentGroup}`);
       if (notes.length) {
         await gowa.alertAdmin(`${pair.teacher} / ${pair.student}: WhatsApp would not add ` +
           `${notes.join('; ')}. Invite them to the group by hand.`).catch(() => {});
@@ -89,7 +88,7 @@ async function reconcile() {
     return; // one per pass
   }
 
-  // A batch renamed on the site renames both its groups, so the two never drift apart.
+  // A batch renamed on the site renames its groups, so they never drift apart.
   for (const c of existing) {
     const pair = await people.pairOf(c.teacherId, c.studentId);
     if (!pair || !pair.batch || pair.batch === c.groupName) continue;

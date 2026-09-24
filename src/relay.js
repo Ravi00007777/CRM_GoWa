@@ -67,9 +67,34 @@ async function alertOnce(key, text) {
   try { await gowa.alertAdmin(text); } catch (err) { console.error('[relay] admin alert failed:', err.message); }
 }
 
+const WEBSITE_ONLY = 'Please send messages and assignments from the AlmaEd website. Messages sent here are not passed on.';
+const DRIVE_ONLY = 'Files are not passed on. Please upload it to Google Drive and send the link as a message.';
+
+// Teachers write only on the AlmaEd site; the outbox sends that to the student's group. What a
+// student or parent sends on WhatsApp goes into the site's doubt thread, where the teacher reads
+// and answers it. So nothing is relayed WhatsApp-to-WhatsApp any more.
+async function saveFromStudent({ pair, p, m, body, reply, log }) {
+  if (m.kind === 'contact') {
+    log('[contact card dropped]', 'DROPPED');
+    return reply('Contact cards are not passed on. Please send the details as text.');
+  }
+  if (m.kind === 'unsupported' || m.kind === 'document') {
+    log('[file dropped: only text is passed on]', 'DROPPED');
+    return reply(DRIVE_ONLY);
+  }
+  const { text, flagged } = redact(body);
+  if (flagged) {
+    log(text, 'FLAGGED');
+    return reply('That message was not passed on: it looked like a phone number or email address.');
+  }
+  if (!text.trim()) return;
+  await people.saveDoubt({ batchId: pair.batch_id, studentId: pair.student_id, body: text, waMessageId: p.id });
+  log(text, 'RELAYED');
+}
+
 // A message in one of AlmaEd's groups. The group says which conversation it is, so nothing has
-// to be tagged. Only the one teacher or student in that group is relayed: the admin is there to
-// watch, and anything the relay itself posted is skipped.
+// to be tagged. Only the one student (parent) in that group counts: the admin is there to watch,
+// and anything the relay itself posted is skipped.
 async function relayGroup(chatJid, p) {
   const side = await groups.sideOfGroup(chatJid);
   if (!side) return; // an ordinary group one of the relay numbers happens to be in
@@ -86,81 +111,31 @@ async function relayGroup(chatJid, p) {
       ` (only ${expected} is relayed from this group)`);
   }
 
-  const ownDevice = side.isTeacher ? cfg.teacherDevice : cfg.studentDevice;
-  const otherDevice = side.isTeacher ? cfg.studentDevice : cfg.teacherDevice;
-  const to = side.isTeacher ? side.studentGroupJid : side.teacherGroupJid;
-
-  const reply = (text) => gowa.sendText(ownDevice, chatJid, text);
-  const direction = side.isTeacher ? 'TEACHER_TO_STUDENT' : 'STUDENT_TO_TEACHER';
-  const log = (content, status, outId = null) => people.log({
-    teacherId: side.teacherId, studentId: side.studentId, direction,
-    waMessageId: p.id, outMessageId: outId, content, status,
-  }).catch((err) => console.error('[relay] log failed:', err.message));
-
   const m = classify(p);
   if (m.kind === 'ignore') return;
+  const reply = (text) => gowa.sendText(side.isTeacher ? cfg.teacherDevice : cfg.studentDevice, chatJid, text);
+  const log = (content, status) => people.log({
+    teacherId: side.teacherId, studentId: side.studentId,
+    direction: side.isTeacher ? 'TEACHER_TO_STUDENT' : 'STUDENT_TO_TEACHER',
+    waMessageId: p.id, outMessageId: null, content, status,
+  }).catch((err) => console.error('[relay] log failed:', err.message));
 
-  // Teachers write on the AlmaEd site (doubt chat and resources), which the outbox sends
-  // on; their group only shows what students send.
+  // Only groups made before teacher groups were dropped still have a teacher side.
   if (side.isTeacher) {
-    log('[teacher wrote in the WhatsApp group; not relayed]', 'DROPPED');
-    return reply('Please send messages and assignments from the AlmaEd website. Messages typed here are not passed on.');
+    log('[teacher wrote on WhatsApp; not relayed]', 'DROPPED');
+    return reply(WEBSITE_ONLY);
   }
-
-  if (m.kind === 'contact') {
-    log('[contact card dropped]', 'DROPPED');
-    return reply('Contact cards are not relayed. Please send the details as text.');
-  }
-  if (m.kind === 'unsupported') {
-    log('[media dropped: only text and documents are relayed]', 'DROPPED');
-    return reply('Images, audio, video and locations are not relayed. Please send text or a PDF/document.');
-  }
-
-  let body = m.kind === 'text' ? m.text : m.caption || '';
-  const isResult = side.isTeacher && /#result\b/i.test(body);
-  if (isResult) body = body.replace(/#result\b/gi, '').trim();
-
-  const { text, flagged } = redact(body);
-  if (flagged) {
-    log(text, 'FLAGGED');
-    return reply('That message was not passed on: it looked like a phone number or email address.');
-  }
-
-  const label = side.isTeacher
-    ? `Teacher ${pair.teacher}${isResult ? ' - Test result' : ''}`
-    : `Student ${pair.student}`;
-  const out = text.trim() ? `${label}:\n${text}` : label;
-
-  // The teacher reads and answers on the site, so the doubt thread gets the message first;
-  // the copy in the teacher's WhatsApp group is only a phone notification.
-  if (!side.isTeacher) {
-    await people.saveDoubt({
-      batchId: pair.batch_id, studentId: side.studentId, waMessageId: p.id,
-      body: m.kind === 'document' ? `${text}\n[sent a document on WhatsApp]`.trim() : text,
-    }).catch((err) => console.error('[relay] saving doubt failed:', err.message));
-  }
-  if (!to) return console.error(`[groups] ${chatJid} has no counterpart group yet`);
-
-  let sent;
-  if (m.kind === 'document') {
-    if (!m.path) return log('[document not downloaded by gowa]', 'DROPPED');
-    const file = await gowa.fetchMedia(m.path);
-    sent = await gowa.sendFile(otherDevice, to, file, `${pair.tag}${m.ext}`, out);
-  } else {
-    sent = await gowa.sendText(otherDevice, to, out);
-  }
-  log(text, 'RELAYED', sent?.message_id || null);
+  const body = m.kind === 'text' ? m.text : m.caption || '';
+  return saveFromStudent({ pair, p, m, body, reply, log });
 }
 
+// A 1:1 chat with one of the relay numbers.
 async function relay(deviceId, p) {
   const role = await gowa.roleOfDevice(deviceId);
   if (!role) return console.warn('[relay] event from unknown device, ignored');
 
   const isTeacher = role === 'teacher';
   const ownDevice = isTeacher ? cfg.teacherDevice : cfg.studentDevice;
-  const otherDevice = isTeacher ? cfg.studentDevice : cfg.teacherDevice;
-  const direction = isTeacher ? 'TEACHER_TO_STUDENT' : 'STUDENT_TO_TEACHER';
-  const noun = isTeacher ? 'student' : 'child';
 
   const sender = await findSender(isTeacher ? people.findTeacher : people.findParent, p);
   if (!sender) {
@@ -171,74 +146,34 @@ async function relay(deviceId, p) {
       `(from=${p.from || '-'} from_lid=${p.from_lid || '-'})`);
   }
   const reply = (text) => gowa.sendText(ownDevice, sender.wa_jid, text);
-  const pairs = await (isTeacher ? people.studentsOfTeacher : people.childrenOfParent)(sender.wa_jid);
 
   const m = classify(p);
   if (m.kind === 'ignore') return;
-  let body = m.kind === 'text' ? m.text : m.caption || '';
+  if (isTeacher) return reply(WEBSITE_ONLY);
+
+  const pairs = await people.childrenOfParent(sender.wa_jid);
+  const body = m.kind === 'text' ? m.text : m.caption || '';
 
   if (/^\s*#list\s*$/i.test(body)) {
     return reply(pairs.length
-      ? `Your ${noun === 'child' ? 'children' : 'students'}:\n` +
-        pairs.map((x) => `#${x.tag} ${x.student}${isTeacher ? '' : ` (teacher ${x.teacher})`}`).join('\n')
-      : `No ${noun} is assigned to you.`);
+      ? `Your children:\n${pairs.map((x) => `#${x.tag} ${x.student} (teacher ${x.teacher})`).join('\n')}`
+      : 'No child is assigned to you.');
   }
   if (!pairs.length) {
-    await reply(`No ${noun} is assigned to you yet. The admin has been notified.`);
-    return alertOnce(`unassigned:${role}:${sender.id}`,
-      `${isTeacher ? 'Teacher' : 'Parent'} "${sender.name || sender.wa_jid}" (id ${sender.id}) sent a message but has no ${noun} assigned.`);
+    await reply('No child is assigned to you yet. The admin has been notified.');
+    return alertOnce(`unassigned:student:${sender.id}`,
+      `Parent "${sender.name || sender.wa_jid}" (id ${sender.id}) sent a message but has no child assigned.`);
   }
 
-  const isResult = isTeacher && /#result\b/i.test(body);
-  if (isResult) body = body.replace(/#result\b/gi, '').trim();
   const prev = p.replied_to_id ? await people.pairOfMessage(p.replied_to_id) : null;
-  const r = route(pairs, body, prev, noun);
-
-  // Nothing to log against when routing failed, so a refusal leaves no row - see the media
-  // branches below, which always answer the sender instead.
-  const log = (content, status, outId = null) => r.pair && people.log({
-    teacherId: r.pair.teacher_id, studentId: r.pair.student_id, direction,
-    waMessageId: p.id, outMessageId: outId, content, status,
-  }).catch((err) => console.error('[relay] log failed:', err.message));
-
-  // Media is never relayed whatever it routes to, so the sender is always told - including when routing
-  // failed, where there is no pair to log against and silence would look like a successful send.
-  if (m.kind === 'contact') {
-    log('[contact card dropped]', 'DROPPED');
-    return reply('Contact cards are not relayed. Please send the details as text.');
-  }
-  if (m.kind === 'unsupported') {
-    log('[media dropped: only text and documents are relayed]', 'DROPPED');
-    return reply(isTeacher
-      ? 'Images, audio, video and locations are not relayed. Please send notes as a PDF/document.'
-      : 'Images, audio, video and locations are not relayed. Please send text or a PDF/document.');
-  }
+  const r = route(pairs, body, prev, 'child');
   if (r.refuse) return reply(r.refuse);
 
-  const { pair } = r;
-  const { text, flagged } = redact(r.body);
-  if (flagged) return log(text, 'FLAGGED');
-
-  const label = isTeacher
-    ? `Teacher ${pair.teacher} (for ${pair.student})${isResult ? ' - Test result' : ''}`
-    : `Student ${pair.student} (#${pair.tag})`;
-  const out = text.trim() ? `${label}:\n${text}` : label;
-  const to = isTeacher ? pair.parent_jid : pair.teacher_jid;
-
-  let sent;
-  if (m.kind === 'document') {
-    if (!m.path) {
-      log('[document not downloaded by gowa]', 'DROPPED');
-      return alertOnce(`nodoc:${pair.teacher_id}:${pair.student_id}`,
-        `${pair.teacher} / ${pair.student}: a document could not be relayed (gowa auto-download-media is off?).`);
-    }
-    const file = await gowa.fetchMedia(m.path);
-    sent = await gowa.sendFile(otherDevice, to, file, `${pair.tag}${m.ext}`, out);
-  } else {
-    sent = await gowa.sendText(otherDevice, to, out);
-  }
-
-  log(text, 'RELAYED', sent?.message_id || null);
+  const log = (content, status) => people.log({
+    teacherId: r.pair.teacher_id, studentId: r.pair.student_id, direction: 'STUDENT_TO_TEACHER',
+    waMessageId: p.id, outMessageId: null, content, status,
+  }).catch((err) => console.error('[relay] log failed:', err.message));
+  return saveFromStudent({ pair: r.pair, p, m, body: r.body, reply, log });
 }
 
 async function handleWebhook(req, res) {
