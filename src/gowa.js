@@ -40,6 +40,17 @@ async function createGroup(device, title, participants) {
   return { jid: r.group_id, missing: r.participant_status?.filter((p) => p.status !== 'success') ?? [] };
 }
 
+// Joins a group the student already has, from its invite link, and returns the group's JID.
+async function joinGroupWithLink(device, link) {
+  const r = await call('/group/join-with-link', { device, json: { link } });
+  if (!r?.group_id) throw new Error('gowa did not return the joined group');
+  return r.group_id;
+}
+
+async function leaveGroup(device, jid) {
+  return call('/group/leave', { device, json: { group_id: jid } });
+}
+
 async function renameGroup(device, jid, name) {
   return call('/group/name', { device, json: { group_id: jid, name } });
 }
@@ -94,4 +105,4 @@ async function roleOfDevice(deviceId) {
   return match();
 }
 
-module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants };
+module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants, joinGroupWithLink, leaveGroup };

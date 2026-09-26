@@ -13,7 +13,8 @@ const cfg = require('./config');
 const gowa = require('./gowa');
 const people = require('./people');
 
-const SELECT = `SELECT "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName"
+const SELECT = `SELECT "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName",
+    "studentGroupInvite", "existingGroup"
   FROM "WaConversation"`;
 
 let cache = { at: 0, rows: [] };
@@ -66,12 +67,48 @@ async function createFor(pair) {
   return { teacherGroup, studentGroup, notes };
 }
 
+// Admin pasted the invite link of a group the student already has (on the AlmaEd site). The
+// student-facing number joins it and the pair switches to it; a group the relay had made for the
+// pair before is left, so it goes quiet. The old group is used as it is and never renamed.
+async function linkExisting(c) {
+  const jid = await gowa.joinGroupWithLink(cfg.studentDevice, c.studentGroupInvite);
+  await people.pool.query(
+    `UPDATE "WaConversation" SET "studentGroupJid" = $3, "studentGroupInvite" = NULL, "existingGroup" = true,
+       note = NULL, "updatedAt" = now() WHERE "teacherId" = $1 AND "studentId" = $2`,
+    [c.teacherId, c.studentId, jid]);
+  refresh();
+  if (c.studentGroupJid && c.studentGroupJid !== jid) {
+    await gowa.leaveGroup(cfg.studentDevice, c.studentGroupJid)
+      .catch((err) => console.error(`[groups] could not leave ${c.studentGroupJid}:`, err.message));
+  }
+  return jid;
+}
+
 // Called on a timer: every pair in AlmaEd that has no groups yet gets them. Creating a group is
 // slow and rate-limited by WhatsApp, so one pair per pass is plenty - a new batch is ready
 // within a minute, and a burst of new students cannot trip WhatsApp's limits.
 async function reconcile() {
   const existing = await conversations();
   const has = new Set(existing.map((c) => `${c.teacherId}:${c.studentId}`));
+
+  // Existing groups admin linked come first, so no new group is made for those students.
+  for (const c of existing) {
+    if (!c.studentGroupInvite) continue;
+    try {
+      const jid = await linkExisting(c);
+      console.log(`[groups] linked existing group ${jid} for student ${c.studentId}`);
+    } catch (err) {
+      // Not retried every minute: the link is cleared and admin sees why on the batch page.
+      const note = `Could not join the existing WhatsApp group: ${err.message}. Check the invite link and paste it again.`;
+      await people.pool.query(
+        `UPDATE "WaConversation" SET "studentGroupInvite" = NULL, note = $3, "updatedAt" = now()
+         WHERE "teacherId" = $1 AND "studentId" = $2`, [c.teacherId, c.studentId, note]);
+      refresh();
+      console.error(`[groups] ${note}`);
+      await gowa.alertAdmin(note).catch(() => {});
+    }
+    return; // one per pass
+  }
 
   for (const pair of await people.directory()) {
     if (has.has(`${pair.teacher_id}:${pair.student_id}`)) continue;
@@ -91,7 +128,7 @@ async function reconcile() {
   // A batch renamed on the site renames its groups, so they never drift apart.
   for (const c of existing) {
     const pair = await people.pairOf(c.teacherId, c.studentId);
-    if (!pair || !pair.batch || pair.batch === c.groupName) continue;
+    if (!pair || !pair.batch || pair.batch === c.groupName || c.existingGroup) continue;
     try {
       if (c.teacherGroupJid) await gowa.renameGroup(cfg.teacherDevice, c.teacherGroupJid, pair.batch);
       if (c.studentGroupJid) await gowa.renameGroup(cfg.studentDevice, c.studentGroupJid, pair.batch);
