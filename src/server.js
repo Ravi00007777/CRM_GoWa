@@ -3,6 +3,7 @@ const cfg = require('./config');
 const { handleWebhook } = require('./relay');
 const groups = require('./groups');
 const outbox = require('./outbox');
+const reminders = require('./reminders');
 
 const app = express();
 
@@ -16,3 +17,5 @@ app.listen(cfg.port, () => console.log(`AlmaEd WhatsApp relay listening on :${cf
 groups.start();
 // Sends what teachers write on the AlmaEd site to the students' WhatsApp groups.
 outbox.start();
+// Teacher WhatsApp reminders ~3 hours before each class, and the site's reminder emails.
+reminders.start();

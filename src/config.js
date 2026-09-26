@@ -22,4 +22,7 @@ module.exports = {
   reminderGapHours: Number(process.env.REMINDER_GAP_HOURS) || 12,
   testHourIst: Number(process.env.TEST_HOUR_IST ?? 11),
   countryCode: process.env.DEFAULT_COUNTRY_CODE || '91',
+  // Optional: with both set, the relay triggers the AlmaEd site's reminder emails every 5 minutes.
+  appUrl: (process.env.APP_URL || '').replace(/\/$/, ''),
+  cronSecret: process.env.CRON_SECRET || '',
 };
