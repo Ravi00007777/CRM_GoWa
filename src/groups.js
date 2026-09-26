@@ -14,7 +14,7 @@ const gowa = require('./gowa');
 const people = require('./people');
 
 const SELECT = `SELECT "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName",
-    "studentGroupInvite", "existingGroup", "wantsNewGroup"
+    "studentGroupInvite", "existingGroup", "wantsNewGroup", "groupTopicLink"
   FROM "WaConversation"`;
 
 let cache = { at: 0, rows: [] };
@@ -82,6 +82,15 @@ async function linkExisting(c) {
       .catch((err) => console.error(`[groups] could not leave ${c.studentGroupJid}:`, err.message));
   }
   return jid;
+}
+
+// The batch's assignments folder, as one line of the student group's description. Only that
+// line is added, replaced or removed, so a description an existing group already had is kept.
+const TOPIC_LINE = '📁 Assignments folder:';
+function withAssignmentsLink(topic, link) {
+  const kept = String(topic || '').split('\n').filter((l) => !l.startsWith(TOPIC_LINE));
+  if (link) kept.push(`${TOPIC_LINE} ${link}`);
+  return kept.join('\n').trim();
 }
 
 const setNote = async (c, note, extra = '') => {
@@ -157,6 +166,33 @@ async function reconcile() {
     }
     return; // one per pass
   }
+
+  await syncTopics(existing);
+}
+
+// Admin set or changed the batch's Drive folder on the site: write it into the group description.
+async function syncTopics(existing) {
+  for (const c of existing) {
+    if (!c.studentGroupJid) continue;
+    const pair = await people.pairOf(c.teacherId, c.studentId);
+    const want = pair?.drive_link || null;
+    if (!pair || want === (c.groupTopicLink || null)) continue;
+    try {
+      const current = await gowa.groupTopic(cfg.studentDevice, c.studentGroupJid).catch(() => '');
+      await gowa.setGroupTopic(cfg.studentDevice, c.studentGroupJid, withAssignmentsLink(current, want));
+      console.log(`[groups] description of ${c.studentGroupJid} now has the assignments folder`);
+    } catch (err) {
+      // Not retried every minute: usually the group only lets admins edit its info.
+      await setNote(c, `Could not put the assignments folder in the WhatsApp group description (${err.message}). ` +
+        'Make the student number a group admin, or add the link to the description by hand.');
+    }
+    await people.pool.query(
+      'UPDATE "WaConversation" SET "groupTopicLink" = $3, "updatedAt" = now() WHERE "teacherId" = $1 AND "studentId" = $2',
+      [c.teacherId, c.studentId, want]);
+    refresh();
+    return true; // one per pass
+  }
+  return false;
 }
 
 function start() {
@@ -165,4 +201,4 @@ function start() {
   setTimeout(tick, 5e3).unref();
 }
 
-module.exports = { sideOfGroup, reconcile, createFor, start, refresh };
+module.exports = { sideOfGroup, reconcile, createFor, start, refresh, withAssignmentsLink };

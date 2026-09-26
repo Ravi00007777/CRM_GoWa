@@ -106,3 +106,34 @@ test('a bad link is not retried forever: it is cleared, noted for admin, and adm
   assert.match(rows[0].note, /invite link revoked/);
   assert.equal(calls.at(-1)[0], 'alert');
 });
+
+test('the assignments folder line is added, replaced or removed, keeping the rest of the description', () => {
+  const { withAssignmentsLink } = groups;
+  assert.equal(withAssignmentsLink('', 'https://drive.google.com/a'), '📁 Assignments folder: https://drive.google.com/a');
+  assert.equal(
+    withAssignmentsLink('Class 10 parents\n📁 Assignments folder: https://drive.google.com/old', 'https://drive.google.com/new'),
+    'Class 10 parents\n📁 Assignments folder: https://drive.google.com/new');
+  assert.equal(withAssignmentsLink('Class 10 parents\n📁 Assignments folder: https://drive.google.com/old', null), 'Class 10 parents');
+});
+
+test('a changed Drive link is written into the group description once', async () => {
+  pairs = [{ ...PAIR, drive_link: 'https://drive.google.com/new' }];
+  rows = [row({ studentGroupJid: 'g@g.us', groupName: 'Renamed batch', groupTopicLink: null })];
+  const writes = [];
+  gowa.groupTopic = async () => 'Old parents group rules';
+  gowa.setGroupTopic = async (device, jid, topic) => { writes.push([device, jid, topic]); };
+  const realQuery = people.pool.query;
+  people.pool.query = async (sql, args = []) => {
+    if (sql.includes('"groupTopicLink" = $3')) { rows[0].groupTopicLink = args[2]; return { rowCount: 1 }; }
+    return realQuery(sql, args);
+  };
+  try {
+    await groups.reconcile();
+    groups.refresh();
+    await groups.reconcile(); // already written: nothing more
+  } finally {
+    people.pool.query = realQuery;
+  }
+  assert.deepEqual(writes, [['student', 'g@g.us', 'Old parents group rules\n📁 Assignments folder: https://drive.google.com/new']]);
+  assert.equal(rows[0].groupTopicLink, 'https://drive.google.com/new');
+});
