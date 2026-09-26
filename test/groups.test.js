@@ -13,8 +13,9 @@ const gowa = require('../src/gowa');
 
 let rows;
 let calls;
-people.directory = async () => [];
-people.pairOf = async () => ({ batch: 'Renamed batch' });
+let pairs;
+people.directory = async () => pairs;
+people.pairOf = async (t, st) => pairs.find((p) => p.teacher_id === t && p.student_id === st);
 people.pool = {
   query: async (sql, args = []) => {
     if (sql.startsWith('SELECT "teacherId"')) return { rows: rows.map((r) => ({ ...r })) };
@@ -22,8 +23,16 @@ people.pool = {
       Object.assign(rows[0], { studentGroupJid: args[2], studentGroupInvite: null, existingGroup: true, note: null });
       return { rowCount: 1 };
     }
-    if (sql.includes('note = $3')) {
+    if (sql.includes('"studentGroupInvite" = NULL, note = $3')) {
       Object.assign(rows[0], { studentGroupInvite: null, note: args[2] });
+      return { rowCount: 1 };
+    }
+    if (sql.startsWith('UPDATE "WaConversation" SET note = $3')) {
+      Object.assign(rows[0], { note: args[2] }, sql.includes('"wantsNewGroup" = false') ? { wantsNewGroup: false } : {});
+      return { rowCount: 1 };
+    }
+    if (sql.startsWith('INSERT INTO "WaConversation"')) {
+      Object.assign(rows[0], { studentGroupJid: args[3], wantsNewGroup: false, note: args[4], groupName: args[5] });
       return { rowCount: 1 };
     }
     throw new Error(`unexpected query: ${sql}`);
@@ -38,14 +47,41 @@ Object.assign(gowa, {
   leaveGroup: async (device, jid) => { calls.push(['leave', device, jid]); },
   renameGroup: async (device, jid, name) => { calls.push(['rename', device, jid, name]); },
   alertAdmin: async (text) => { calls.push(['alert', text]); },
+  createGroup: async (device, title, participants) => {
+    calls.push(['create', device, title, participants]);
+    return { jid: 'new@g.us', missing: [] };
+  },
 });
 
 const groups = require('../src/groups');
 
 const row = (extra) => ({ teacherId: 't1', studentId: 's1', teacherGroupJid: null, studentGroupJid: null,
-  note: null, groupName: 'Batch', studentGroupInvite: null, existingGroup: false, ...extra });
+  note: null, groupName: 'Batch', studentGroupInvite: null, existingGroup: false, wantsNewGroup: false, ...extra });
+const PAIR = { teacher_id: 't1', student_id: 's1', teacher: 'Vishwas', student: 'Akash', batch: 'Renamed batch',
+  parent_jid: '918888888888@s.whatsapp.net', teacher_jid: '919999999999@s.whatsapp.net' };
 
-test.beforeEach(() => { calls = []; groups.refresh(); });
+test.beforeEach(() => { calls = []; pairs = [PAIR]; groups.refresh(); });
+
+test('a new batch alone makes no group; admin asking for one does', async () => {
+  rows = [];
+  await groups.reconcile();
+  assert.deepEqual(calls, []); // student is in a batch, but nobody asked
+
+  rows = [row({ wantsNewGroup: true, groupName: null })];
+  groups.refresh();
+  await groups.reconcile();
+  assert.deepEqual(calls, [['create', 'student', 'Renamed batch', [PAIR.parent_jid, '910000000000@s.whatsapp.net']]]);
+  assert.deepEqual([rows[0].studentGroupJid, rows[0].wantsNewGroup], ['new@g.us', false]);
+});
+
+test('a requested group waits, with a note, until the student has a phone and WhatsApp tag', async () => {
+  pairs = [];
+  rows = [row({ wantsNewGroup: true })];
+  await groups.reconcile();
+  assert.deepEqual(calls, []);
+  assert.match(rows[0].note, /needs a phone number and a WhatsApp tag/);
+  assert.equal(rows[0].wantsNewGroup, true);
+});
 
 test('a pasted invite link: the student number joins it, switches to it, and leaves the group it had made', async () => {
   rows = [row({ studentGroupJid: 'made@g.us', studentGroupInvite: 'https://chat.whatsapp.com/AbCdEfGhIjK' })];

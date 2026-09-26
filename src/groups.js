@@ -14,7 +14,7 @@ const gowa = require('./gowa');
 const people = require('./people');
 
 const SELECT = `SELECT "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName",
-    "studentGroupInvite", "existingGroup"
+    "studentGroupInvite", "existingGroup", "wantsNewGroup"
   FROM "WaConversation"`;
 
 let cache = { at: 0, rows: [] };
@@ -59,7 +59,7 @@ async function createFor(pair) {
      VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, now(), now())
      ON CONFLICT ("teacherId", "studentId") DO UPDATE
        SET "teacherGroupJid" = EXCLUDED."teacherGroupJid",
-           "studentGroupJid" = EXCLUDED."studentGroupJid",
+           "studentGroupJid" = EXCLUDED."studentGroupJid", "wantsNewGroup" = false,
            note = EXCLUDED.note, "groupName" = EXCLUDED."groupName", "updatedAt" = now()`,
     [pair.teacher_id, pair.student_id, teacherGroup, studentGroup, notes.join('; ') || null, pair.batch],
   );
@@ -84,12 +84,18 @@ async function linkExisting(c) {
   return jid;
 }
 
-// Called on a timer: every pair in AlmaEd that has no groups yet gets them. Creating a group is
-// slow and rate-limited by WhatsApp, so one pair per pass is plenty - a new batch is ready
-// within a minute, and a burst of new students cannot trip WhatsApp's limits.
+const setNote = async (c, note, extra = '') => {
+  await people.pool.query(
+    `UPDATE "WaConversation" SET note = $3${extra}, "updatedAt" = now() WHERE "teacherId" = $1 AND "studentId" = $2`,
+    [c.teacherId, c.studentId, note]);
+  refresh();
+};
+
+// Called on a timer. Groups are made only when admin asked for one on the batch page
+// (wantsNewGroup), or joined when admin pasted an existing group's link - never just because a
+// batch exists. Creating a group is slow and rate-limited by WhatsApp, so one per pass.
 async function reconcile() {
   const existing = await conversations();
-  const has = new Set(existing.map((c) => `${c.teacherId}:${c.studentId}`));
 
   // Existing groups admin linked come first, so no new group is made for those students.
   for (const c of existing) {
@@ -110,8 +116,16 @@ async function reconcile() {
     return; // one per pass
   }
 
-  for (const pair of await people.directory()) {
-    if (has.has(`${pair.teacher_id}:${pair.student_id}`)) continue;
+  for (const c of existing) {
+    if (!c.wantsNewGroup || c.studentGroupJid || c.studentGroupInvite) continue;
+    const pair = await people.pairOf(c.teacherId, c.studentId);
+    if (!pair) {
+      // Stays requested: made as soon as the missing details are filled in on the site.
+      if (!c.note) {
+        await setNote(c, 'Waiting to create the WhatsApp group: the student needs a phone number and a WhatsApp tag, and the teacher a phone number.');
+      }
+      continue;
+    }
     try {
       const { studentGroup, notes } = await createFor(pair);
       console.log(`[groups] ${pair.teacher} / ${pair.student}: ${studentGroup}`);
@@ -120,6 +134,8 @@ async function reconcile() {
           `${notes.join('; ')}. Invite them to the group by hand.`).catch(() => {});
       }
     } catch (err) {
+      // Not retried every minute: admin sees why on the batch page and can ask again.
+      await setNote(c, `Could not create the WhatsApp group: ${err.message}. Try again from the batch page.`, ', "wantsNewGroup" = false');
       console.error(`[groups] could not set up ${pair.teacher} / ${pair.student}:`, err.message);
     }
     return; // one per pass
