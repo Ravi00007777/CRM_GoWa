@@ -13,7 +13,7 @@ const { toJid } = require('./redact');
 const q = (sql, args) => people.pool.query(sql, args);
 
 const DUE = `
-  SELECT c.id, c."scheduledAt", b.name AS batch, b."meetLink", t.name AS teacher, t.phone
+  SELECT c.id, c."scheduledAt", c.topic, b.name AS batch, b."meetLink", t.name AS teacher, t.phone
   FROM "Class" c JOIN "Batch" b ON b.id = c."batchId" JOIN "User" t ON t.id = b."teacherId"
   WHERE c.status = 'SCHEDULED' AND c."teacherWaRemindedAt" IS NULL
     AND c."scheduledAt" > now() AND c."scheduledAt" <= now() + interval '3 hours'
@@ -28,6 +28,7 @@ function reminderText(row, now = Date.now()) {
   const mins = Math.max(0, Math.round((new Date(row.scheduledAt).getTime() - now) / 60000));
   const inWhat = mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`;
   return `⏰ Class reminder\n${row.batch} starts ${ist(row.scheduledAt)} IST (in about ${inWhat}).\n` +
+    (row.topic ? `Topic: ${row.topic}\n` : '') +
     `Please prepare for the class.\nJoin: ${row.meetLink}`;
 }
 

@@ -12,7 +12,7 @@ const people = require('../src/people');
 const gowa = require('../src/gowa');
 
 const classes = [{ id: 'c1', scheduledAt: new Date(Date.now() + 150 * 60000), batch: 'VishAkash',
-  meetLink: 'https://meet.google.com/abc-defg-hij', teacher: 'Vishwas', phone: '99342 37343', remindedAt: null }];
+  meetLink: 'https://meet.google.com/abc-defg-hij', topic: 'Quadratic equations', teacher: 'Vishwas', phone: '99342 37343', remindedAt: null }];
 people.pool = {
   query: async (sql, args = []) => {
     if (sql.includes('FROM "Class" c')) return { rows: classes.filter((c) => !c.remindedAt) };
@@ -35,6 +35,7 @@ test('the teacher gets one WhatsApp reminder per class, from the teacher number'
   assert.equal(sent.length, 1);
   assert.deepEqual([sent[0].device, sent[0].jid], ['teacher', '919934237343@s.whatsapp.net']);
   assert.match(sent[0].text, /VishAkash starts .* IST \(in about 2 h (29|30) min\)/);
+  assert.match(sent[0].text, /Topic: Quadratic equations/);
   assert.match(sent[0].text, /Please prepare/);
   assert.match(sent[0].text, /meet\.google\.com\/abc-defg-hij/);
 });
