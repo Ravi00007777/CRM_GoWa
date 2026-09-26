@@ -13,7 +13,8 @@ const { toJid } = require('./redact');
 const q = (sql, args) => people.pool.query(sql, args);
 
 const DUE = `
-  SELECT c.id, c."scheduledAt", c.topic, b.name AS batch, b."meetLink", t.name AS teacher, t.phone
+  SELECT c.id, c."scheduledAt", c.topic, b.name AS batch,
+         COALESCE(c."meetLink", b."meetLink") AS "meetLink", t.name AS teacher, t.phone
   FROM "Class" c JOIN "Batch" b ON b.id = c."batchId" JOIN "User" t ON t.id = b."teacherId"
   WHERE c.status = 'SCHEDULED' AND c."teacherWaRemindedAt" IS NULL
     AND c."scheduledAt" > now() AND c."scheduledAt" <= now() + interval '3 hours'
