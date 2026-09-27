@@ -206,6 +206,8 @@ async function syncParents(existing) {
 // Admin saved the batch's links on the site: rewrite the group description to match.
 // groupTopicLink holds the description last written, so each change is written once.
 async function syncTopics(existing) {
+  // Off until admin has filled in each batch's links; set GROUP_DESCRIPTIONS=on in .env to start.
+  if (process.env.GROUP_DESCRIPTIONS !== 'on') return false;
   for (const c of existing) {
     if (!c.studentGroupJid) continue;
     const pair = await people.pairOf(c.teacherId, c.studentId);
