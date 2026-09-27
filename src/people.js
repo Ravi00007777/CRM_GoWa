@@ -9,11 +9,13 @@ const { toJid } = require('./redact');
 // which node-postgres rejects by default.
 const pool = new Pool({ connectionString: cfg.databaseUrl, ssl: { rejectUnauthorized: false } });
 
-// A teacher is reachable if they are active and have a phone; a student's phone is also
-// their parent's, which is how AlmaEd models it. Batch membership is the assignment.
+// A teacher is reachable if they are active and have a phone. A student has their own number
+// (student_jid: what they send lands in the teacher's doubt chat) and optionally a parent's
+// (parent_jid: in the group to follow along, never relayed). Batch membership is the assignment.
 const DIRECTORY = `
   SELECT t.id AS teacher_id, t.name AS teacher, t.phone AS teacher_phone,
          s.id AS student_id, s.name AS student, s."waTag" AS tag, s.phone AS student_phone,
+         s."parentPhone" AS parent_phone,
          b.id AS batch_id, b.name AS batch, b."driveLink" AS drive_link,
          b."meetLink" AS meet_link, b."scheduleSheetLink" AS schedule_sheet_link
   FROM "BatchStudent" bs
@@ -36,16 +38,23 @@ async function directory() {
   for (const r of rows) {
     // A phone AlmaEd cannot turn into a WhatsApp number is skipped, not guessed at: relaying
     // to the wrong person is worse than not relaying.
-    let parent_jid;
+    let student_jid;
     let teacher_jid;
     try {
-      parent_jid = toJid(r.student_phone, cfg.countryCode);
+      student_jid = toJid(r.student_phone, cfg.countryCode);
       teacher_jid = toJid(r.teacher_phone, cfg.countryCode);
     } catch {
       console.warn(`[people] skipped ${r.student}/${r.teacher}: phone is not a usable number`);
       continue;
     }
-    pairs.push({ ...r, parent_jid, teacher_jid });
+    // A bad parent number only leaves the parent out; the student still works.
+    let parent_jid = null;
+    try {
+      if (r.parent_phone) parent_jid = toJid(r.parent_phone, cfg.countryCode);
+    } catch {
+      console.warn(`[people] ${r.student}: parent number is not usable, left out`);
+    }
+    pairs.push({ ...r, student_jid, parent_jid, teacher_jid });
   }
   cache = { at: Date.now(), pairs };
   return pairs;
@@ -62,7 +71,7 @@ async function studentsOfTeacher(jid) {
 }
 
 async function childrenOfParent(jid) {
-  return (await directory()).filter((p) => user(p.parent_jid) === user(jid));
+  return (await directory()).filter((p) => user(p.student_jid) === user(jid));
 }
 
 // One pair by ids, for a group whose conversation is already known.
@@ -78,8 +87,8 @@ async function findTeacher(jids) {
 
 async function findParent(jids) {
   const dir = await directory();
-  const hit = dir.find((p) => jids.some((j) => j && user(p.parent_jid) === user(j)));
-  return hit && { id: hit.student_id, name: hit.student, wa_jid: hit.parent_jid };
+  const hit = dir.find((p) => jids.some((j) => j && user(p.student_jid) === user(j)));
+  return hit && { id: hit.student_id, name: hit.student, wa_jid: hit.student_jid };
 }
 
 // Duplicate inbound ids are ignored rather than logged twice, so a gowa webhook retry is safe.

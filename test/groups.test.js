@@ -27,12 +27,16 @@ people.pool = {
       Object.assign(rows[0], { studentGroupInvite: null, note: args[2] });
       return { rowCount: 1 };
     }
+    if (sql.includes('"parentJidAdded" = $3')) {
+      Object.assign(rows[0], { parentJidAdded: args[2] }, args[3] ? { note: args[3] } : {});
+      return { rowCount: 1 };
+    }
     if (sql.startsWith('UPDATE "WaConversation" SET note = $3')) {
       Object.assign(rows[0], { note: args[2] }, sql.includes('"wantsNewGroup" = false') ? { wantsNewGroup: false } : {});
       return { rowCount: 1 };
     }
     if (sql.startsWith('INSERT INTO "WaConversation"')) {
-      Object.assign(rows[0], { studentGroupJid: args[3], wantsNewGroup: false, note: args[4], groupName: args[5] });
+      Object.assign(rows[0], { studentGroupJid: args[3], wantsNewGroup: false, note: args[4], groupName: args[5], parentJidAdded: args[6] });
       return { rowCount: 1 };
     }
     throw new Error(`unexpected query: ${sql}`);
@@ -47,6 +51,9 @@ Object.assign(gowa, {
   leaveGroup: async (device, jid) => { calls.push(['leave', device, jid]); },
   renameGroup: async (device, jid, name) => { calls.push(['rename', device, jid, name]); },
   alertAdmin: async (text) => { calls.push(['alert', text]); },
+  addParticipants: async (device, jid, participants) => { calls.push(['add', device, jid, participants]); return { missing: [] }; },
+  removeParticipants: async (device, jid, participants) => { calls.push(['remove', device, jid, participants]); },
+  setGroupTopic: async () => {},
   createGroup: async (device, title, participants) => {
     calls.push(['create', device, title, participants]);
     return { jid: 'new@g.us', missing: [] };
@@ -58,7 +65,8 @@ const groups = require('../src/groups');
 const row = (extra) => ({ teacherId: 't1', studentId: 's1', teacherGroupJid: null, studentGroupJid: null,
   note: null, groupName: 'Batch', studentGroupInvite: null, existingGroup: false, wantsNewGroup: false, ...extra });
 const PAIR = { teacher_id: 't1', student_id: 's1', teacher: 'Vishwas', student: 'Akash', batch: 'Renamed batch',
-  parent_jid: '918888888888@s.whatsapp.net', teacher_jid: '919999999999@s.whatsapp.net' };
+  student_jid: '918888888888@s.whatsapp.net', parent_jid: null, teacher_jid: '919999999999@s.whatsapp.net' };
+const PARENT = '917777777777@s.whatsapp.net';
 
 test.beforeEach(() => { calls = []; pairs = [PAIR]; groups.refresh(); });
 
@@ -70,7 +78,7 @@ test('a new batch alone makes no group; admin asking for one does', async () => 
   rows = [row({ wantsNewGroup: true, groupName: null })];
   groups.refresh();
   await groups.reconcile();
-  assert.deepEqual(calls, [['create', 'student', 'Renamed batch', [PAIR.parent_jid, '910000000000@s.whatsapp.net']]]);
+  assert.deepEqual(calls, [['create', 'student', 'Renamed batch', [PAIR.student_jid, '910000000000@s.whatsapp.net']]]);
   assert.deepEqual([rows[0].studentGroupJid, rows[0].wantsNewGroup], ['new@g.us', false]);
 });
 
@@ -139,4 +147,27 @@ test('changed batch links rewrite the group description once', async () => {
   }
   assert.deepEqual(writes, [['student', 'g@g.us',
     'Join classes using this Google Meet link: https://meet.google.com/x\n\nAssignment and notes docs:\nhttps://drive.google.com/new']]);
+});
+
+test('a new group includes the parent when the site has their number', async () => {
+  pairs = [{ ...PAIR, parent_jid: PARENT }];
+  rows = [row({ wantsNewGroup: true, groupName: null })];
+  await groups.reconcile();
+  assert.deepEqual(calls[0], ['create', 'student', 'Renamed batch', [PAIR.student_jid, PARENT, '910000000000@s.whatsapp.net']]);
+  assert.equal(rows[0].parentJidAdded, PARENT);
+});
+
+test('a parent number added or changed later is added to the existing group, once', async () => {
+  const OLD = '915555555555@s.whatsapp.net';
+  pairs = [{ ...PAIR, parent_jid: PARENT }];
+  rows = [row({ studentGroupJid: 'g@g.us', groupName: 'Renamed batch', groupTopicLink: 'x', parentJidAdded: OLD })];
+  groups.refresh();
+  await groups.reconcile();
+  groups.refresh();
+  await groups.reconcile(); // already done: nothing more
+  assert.deepEqual(calls.filter((c) => c[0] === 'add' || c[0] === 'remove'), [
+    ['remove', 'student', 'g@g.us', [OLD]],
+    ['add', 'student', 'g@g.us', [PARENT]],
+  ]);
+  assert.equal(rows[0].parentJidAdded, PARENT);
 });

@@ -51,6 +51,18 @@ async function leaveGroup(device, jid) {
   return call('/group/leave', { device, json: { group_id: jid } });
 }
 
+// Adds people to an existing group. Like createGroup, anyone WhatsApp won't add (their privacy
+// settings) comes back rather than failing the call.
+async function addParticipants(device, jid, participants) {
+  const r = await call('/group/participants', { device, json: { group_id: jid, participants } });
+  const list = Array.isArray(r) ? r : r?.participant_status ?? r?.participants ?? [];
+  return { missing: list.filter((p) => p.status && p.status !== 'success') };
+}
+
+async function removeParticipants(device, jid, participants) {
+  return call('/group/participants/remove', { device, json: { group_id: jid, participants } });
+}
+
 async function setGroupTopic(device, jid, topic) {
   return call('/group/topic', { device, json: { group_id: jid, topic } });
 }
@@ -109,4 +121,4 @@ async function roleOfDevice(deviceId) {
   return match();
 }
 
-module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants, joinGroupWithLink, leaveGroup, setGroupTopic };
+module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants, joinGroupWithLink, leaveGroup, setGroupTopic, addParticipants, removeParticipants };

@@ -104,8 +104,16 @@ async function relayGroup(chatJid, p) {
 
   // WhatsApp names the sender differently in a group than in a 1:1 chat, and gowa passes
   // several shapes through, so every candidate is checked against the one person expected here.
-  const expected = userPart(side.isTeacher ? pair.teacher_jid : pair.parent_jid);
+  const expected = userPart(side.isTeacher ? pair.teacher_jid : pair.student_jid);
   const candidates = [p.participant, p.sender, p.from, p.from_lid].filter(Boolean).map(userPart);
+  // The parent is in the group to follow along; what they write stays out of the teacher's
+  // doubt chat, and is only logged.
+  if (!side.isTeacher && pair.parent_jid && candidates.includes(userPart(pair.parent_jid))) {
+    return people.log({
+      teacherId: side.teacherId, studentId: side.studentId, direction: 'STUDENT_TO_TEACHER',
+      waMessageId: p.id, outMessageId: null, content: '[parent message; not passed to the teacher]', status: 'DROPPED',
+    }).catch((err) => console.error('[relay] log failed:', err.message));
+  }
   if (!candidates.includes(expected)) {
     return console.log(`[groups] ignored ${candidates.join('/') || 'unknown'} in ${chatJid}` +
       ` (only ${expected} is relayed from this group)`);

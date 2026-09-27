@@ -26,14 +26,14 @@ let doubts = [];
 const user = (j) => String(j).split('@')[0].split(':')[0];
 Object.assign(people, {
   studentsOfTeacher: async (jid) => pairs.filter((p) => user(p.teacher_jid) === user(jid)),
-  childrenOfParent: async (jid) => pairs.filter((p) => user(p.parent_jid) === user(jid)),
+  childrenOfParent: async (jid) => pairs.filter((p) => user(p.student_jid) === user(jid)),
   findTeacher: async (jids) => {
     const hit = pairs.find((p) => jids.some((j) => j && user(p.teacher_jid) === user(j)));
     return hit && { id: hit.teacher_id, name: hit.teacher, wa_jid: hit.teacher_jid };
   },
   findParent: async (jids) => {
-    const hit = pairs.find((p) => jids.some((j) => j && user(p.parent_jid) === user(j)));
-    return hit && { id: hit.student_id, name: hit.student, wa_jid: hit.parent_jid };
+    const hit = pairs.find((p) => jids.some((j) => j && user(p.student_jid) === user(j)));
+    return hit && { id: hit.student_id, name: hit.student, wa_jid: hit.student_jid };
   },
   log: async (row) => { logged.push(row); },
   saveDoubt: async (row) => { doubts.push(row); },
@@ -66,8 +66,8 @@ global.fetch = async (url, opts = {}) => {
   return Response.json({ code: 'SUCCESS', results: { message_id: `out${sent.length}` } });
 };
 
-const pair = (teacher_id, teacher, teacher_jid, student_id, student, tag, parent_jid) =>
-  ({ teacher_id, teacher, teacher_jid, student_id, student, tag, parent_jid, batch_id: `b-${teacher_id}` });
+const pair = (teacher_id, teacher, teacher_jid, student_id, student, tag, student_jid, parent_jid = null) =>
+  ({ teacher_id, teacher, teacher_jid, student_id, student, tag, student_jid, parent_jid, batch_id: `b-${teacher_id}` });
 
 function reset(...rows) {
   pairs = rows;
@@ -179,4 +179,16 @@ test('an old teacher group: the teacher is pointed to the website, nothing is sa
   assert.equal(doubts.length, 0);
   assert.deepEqual([sent[0].device, msg().phone], ['teacher', TEACHER_GROUP]);
   assert.match(msg().message, /from the AlmaEd website/);
+});
+
+test('in the student group, the parent\'s messages stay out of the teacher\'s doubt chat', async () => {
+  const P = '916666666666@s.whatsapp.net';
+  reset(pair('t1', 'Asha', T, 's1', 'Diya', 'diya', S, P));
+  await groupMessage(STUDENT_GROUP, { id: 'g5', participant: P, body: 'is there class today?' });
+  assert.equal(doubts.length, 0);
+  assert.equal(sent.length, 0);
+  assert.equal(logged.at(-1).status, 'DROPPED');
+
+  await groupMessage(STUDENT_GROUP, { id: 'g6', participant: S, body: 'what is q4?' });
+  assert.deepEqual(doubts.map((d) => d.body), ['what is q4?']);
 });

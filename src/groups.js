@@ -1,5 +1,5 @@
-// Each teacher-student conversation has one WhatsApp group: the student (parent), the admin and
-// the student-facing number. The teacher is never in it and works only on the AlmaEd site: what
+// Each teacher-student conversation has one WhatsApp group: the student, their parent (if the
+// site has a number), the admin and the student-facing number. The teacher is never in it and works only on the AlmaEd site: what
 // they write there is posted here by the outbox, and what the student writes here lands in the
 // site's doubt thread. So the student never sees the teacher's number, and the admin reads along.
 //
@@ -14,7 +14,7 @@ const gowa = require('./gowa');
 const people = require('./people');
 
 const SELECT = `SELECT "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName",
-    "studentGroupInvite", "existingGroup", "wantsNewGroup", "groupTopicLink"
+    "studentGroupInvite", "existingGroup", "wantsNewGroup", "groupTopicLink", "parentJidAdded"
   FROM "WaConversation"`;
 
 let cache = { at: 0, rows: [] };
@@ -44,24 +44,25 @@ const adminJid = () => cfg.adminJid;
 // fine and simply never reaches them.
 async function createFor(pair) {
   const notes = [];
-  const make = async (device, title, participant) => {
-    const { jid, missing } = await gowa.createGroup(device, title, [participant, adminJid()]);
+  const make = async (device, title, people) => {
+    const { jid, missing } = await gowa.createGroup(device, title, [...people, adminJid()]);
     for (const m of missing) notes.push(`${m.jid || m.phone}: ${m.status || 'not added'}`);
     return jid;
   };
 
   // The group carries the batch's name, so it is recognisable as what admin sees on the site.
   const teacherGroup = null;
-  const studentGroup = await make(cfg.studentDevice, pair.batch, pair.parent_jid);
+  const studentGroup = await make(cfg.studentDevice, pair.batch, [pair.student_jid, pair.parent_jid].filter(Boolean));
 
   await people.pool.query(
-    `INSERT INTO "WaConversation" (id, "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName", "createdAt", "updatedAt")
-     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, now(), now())
+    `INSERT INTO "WaConversation" (id, "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName", "parentJidAdded", "createdAt", "updatedAt")
+     VALUES (gen_random_uuid()::text, $1, $2, $3, $4, $5, $6, $7, now(), now())
      ON CONFLICT ("teacherId", "studentId") DO UPDATE
        SET "teacherGroupJid" = EXCLUDED."teacherGroupJid",
            "studentGroupJid" = EXCLUDED."studentGroupJid", "wantsNewGroup" = false,
+           "parentJidAdded" = EXCLUDED."parentJidAdded",
            note = EXCLUDED.note, "groupName" = EXCLUDED."groupName", "updatedAt" = now()`,
-    [pair.teacher_id, pair.student_id, teacherGroup, studentGroup, notes.join('; ') || null, pair.batch],
+    [pair.teacher_id, pair.student_id, teacherGroup, studentGroup, notes.join('; ') || null, pair.batch, pair.parent_jid || null],
   );
   refresh();
   return { teacherGroup, studentGroup, notes };
@@ -168,7 +169,38 @@ async function reconcile() {
     return; // one per pass
   }
 
-  await syncTopics(existing);
+  if (await syncTopics(existing)) return;
+  await syncParents(existing);
+}
+
+// Admin added, changed or removed a student's parent number on the site: bring the group in
+// line (a replaced number is removed from it). parentJidAdded is what was last done.
+async function syncParents(existing) {
+  for (const c of existing) {
+    if (!c.studentGroupJid) continue;
+    const pair = await people.pairOf(c.teacherId, c.studentId);
+    if (!pair) continue;
+    const want = pair.parent_jid || null;
+    if (want === (c.parentJidAdded || null)) continue;
+    let note = null;
+    try {
+      if (c.parentJidAdded && c.parentJidAdded !== want) {
+        await gowa.removeParticipants(cfg.studentDevice, c.studentGroupJid, [c.parentJidAdded]).catch(() => {});
+      }
+      if (want) {
+        const { missing } = await gowa.addParticipants(cfg.studentDevice, c.studentGroupJid, [want]);
+        if (missing.length) note = `WhatsApp would not add the parent (${want.split('@')[0]}), probably their privacy settings. Invite them to the group by hand.`;
+      }
+    } catch (err) {
+      note = `Could not add the parent to the WhatsApp group: ${err.message}. Make the student number a group admin, or add them by hand.`;
+    }
+    await people.pool.query(
+      `UPDATE "WaConversation" SET "parentJidAdded" = $3, note = COALESCE($4, note), "updatedAt" = now()
+       WHERE "teacherId" = $1 AND "studentId" = $2`, [c.teacherId, c.studentId, want, note]);
+    refresh();
+    if (note) await gowa.alertAdmin(`${pair.student}: ${note}`).catch(() => {});
+    return; // one per pass
+  }
 }
 
 // Admin saved the batch's links on the site: rewrite the group description to match.
