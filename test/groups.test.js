@@ -107,20 +107,23 @@ test('a bad link is not retried forever: it is cleared, noted for admin, and adm
   assert.equal(calls.at(-1)[0], 'alert');
 });
 
-test('the assignments folder line is added, replaced or removed, keeping the rest of the description', () => {
-  const { withAssignmentsLink } = groups;
-  assert.equal(withAssignmentsLink('', 'https://drive.google.com/a'), '📁 Assignments folder: https://drive.google.com/a');
+test('the description is built from the batch links in the group\'s own format', () => {
   assert.equal(
-    withAssignmentsLink('Class 10 parents\n📁 Assignments folder: https://drive.google.com/old', 'https://drive.google.com/new'),
-    'Class 10 parents\n📁 Assignments folder: https://drive.google.com/new');
-  assert.equal(withAssignmentsLink('Class 10 parents\n📁 Assignments folder: https://drive.google.com/old', null), 'Class 10 parents');
+    groups.groupDescription({
+      meet_link: 'https://meet.google.com/ebh-oyye-fnj',
+      schedule_sheet_link: 'https://docs.google.com/spreadsheets/d/abc/edit',
+      drive_link: 'https://docs.google.com/spreadsheets/d/def/edit',
+    }),
+    'Join classes using this Google Meet link: https://meet.google.com/ebh-oyye-fnj\n\n' +
+      'Class&AssignmentSchedule- \nhttps://docs.google.com/spreadsheets/d/abc/edit\n\n' +
+      'Assignment and notes docs:\nhttps://docs.google.com/spreadsheets/d/def/edit');
+  assert.equal(groups.groupDescription({ meet_link: 'https://meet.google.com/x' }), 'Join classes using this Google Meet link: https://meet.google.com/x');
 });
 
-test('a changed Drive link is written into the group description once', async () => {
-  pairs = [{ ...PAIR, drive_link: 'https://drive.google.com/new' }];
+test('changed batch links rewrite the group description once', async () => {
+  pairs = [{ ...PAIR, meet_link: 'https://meet.google.com/x', drive_link: 'https://drive.google.com/new' }];
   rows = [row({ studentGroupJid: 'g@g.us', groupName: 'Renamed batch', groupTopicLink: null })];
   const writes = [];
-  gowa.groupTopic = async () => 'Old parents group rules';
   gowa.setGroupTopic = async (device, jid, topic) => { writes.push([device, jid, topic]); };
   const realQuery = people.pool.query;
   people.pool.query = async (sql, args = []) => {
@@ -134,6 +137,6 @@ test('a changed Drive link is written into the group description once', async ()
   } finally {
     people.pool.query = realQuery;
   }
-  assert.deepEqual(writes, [['student', 'g@g.us', 'Old parents group rules\n📁 Assignments folder: https://drive.google.com/new']]);
-  assert.equal(rows[0].groupTopicLink, 'https://drive.google.com/new');
+  assert.deepEqual(writes, [['student', 'g@g.us',
+    'Join classes using this Google Meet link: https://meet.google.com/x\n\nAssignment and notes docs:\nhttps://drive.google.com/new']]);
 });

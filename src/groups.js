@@ -84,13 +84,14 @@ async function linkExisting(c) {
   return jid;
 }
 
-// The batch's assignments folder, as one line of the student group's description. Only that
-// line is added, replaced or removed, so a description an existing group already had is kept.
-const TOPIC_LINE = '📁 Assignments folder:';
-function withAssignmentsLink(topic, link) {
-  const kept = String(topic || '').split('\n').filter((l) => !l.startsWith(TOPIC_LINE));
-  if (link) kept.push(`${TOPIC_LINE} ${link}`);
-  return kept.join('\n').trim();
+// The student group's description, from the batch's three links on the AlmaEd site - the same
+// text the site previews to admin (edtech-platform src/lib/group-description.ts).
+function groupDescription(pair) {
+  const parts = [];
+  if (pair.meet_link) parts.push(`Join classes using this Google Meet link: ${pair.meet_link}`);
+  if (pair.schedule_sheet_link) parts.push(`Class&AssignmentSchedule- \n${pair.schedule_sheet_link}`);
+  if (pair.drive_link) parts.push(`Assignment and notes docs:\n${pair.drive_link}`);
+  return parts.join('\n\n');
 }
 
 const setNote = async (c, note, extra = '') => {
@@ -170,21 +171,22 @@ async function reconcile() {
   await syncTopics(existing);
 }
 
-// Admin set or changed the batch's Drive folder on the site: write it into the group description.
+// Admin saved the batch's links on the site: rewrite the group description to match.
+// groupTopicLink holds the description last written, so each change is written once.
 async function syncTopics(existing) {
   for (const c of existing) {
     if (!c.studentGroupJid) continue;
     const pair = await people.pairOf(c.teacherId, c.studentId);
-    const want = pair?.drive_link || null;
-    if (!pair || want === (c.groupTopicLink || null)) continue;
+    if (!pair) continue;
+    const want = groupDescription(pair);
+    if (!want || want === (c.groupTopicLink || '')) continue;
     try {
-      const current = await gowa.groupTopic(cfg.studentDevice, c.studentGroupJid).catch(() => '');
-      await gowa.setGroupTopic(cfg.studentDevice, c.studentGroupJid, withAssignmentsLink(current, want));
-      console.log(`[groups] description of ${c.studentGroupJid} now has the assignments folder`);
+      await gowa.setGroupTopic(cfg.studentDevice, c.studentGroupJid, want);
+      console.log(`[groups] description of ${c.studentGroupJid} updated from the batch links`);
     } catch (err) {
       // Not retried every minute: usually the group only lets admins edit its info.
-      await setNote(c, `Could not put the assignments folder in the WhatsApp group description (${err.message}). ` +
-        'Make the student number a group admin, or add the link to the description by hand.');
+      await setNote(c, `Could not update the WhatsApp group description (${err.message}). ` +
+        'Make the student number a group admin, or copy the description from the batch page by hand.');
     }
     await people.pool.query(
       'UPDATE "WaConversation" SET "groupTopicLink" = $3, "updatedAt" = now() WHERE "teacherId" = $1 AND "studentId" = $2',
@@ -201,4 +203,4 @@ function start() {
   setTimeout(tick, 5e3).unref();
 }
 
-module.exports = { sideOfGroup, reconcile, createFor, start, refresh, withAssignmentsLink };
+module.exports = { sideOfGroup, reconcile, createFor, start, refresh, groupDescription };

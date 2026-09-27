@@ -51,12 +51,6 @@ async function leaveGroup(device, jid) {
   return call('/group/leave', { device, json: { group_id: jid } });
 }
 
-// A group's description ("topic"), as WhatsApp shows it under Group info.
-async function groupTopic(device, jid) {
-  const r = await call(`/group/info?group_id=${encodeURIComponent(jid)}`, { method: 'GET', device });
-  return String(r?.Topic ?? r?.data?.Topic ?? '');
-}
-
 async function setGroupTopic(device, jid, topic) {
   return call('/group/topic', { device, json: { group_id: jid, topic } });
 }
@@ -115,4 +109,4 @@ async function roleOfDevice(deviceId) {
   return match();
 }
 
-module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants, joinGroupWithLink, leaveGroup, groupTopic, setGroupTopic };
+module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants, joinGroupWithLink, leaveGroup, setGroupTopic };

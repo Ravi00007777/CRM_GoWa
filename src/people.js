@@ -14,7 +14,8 @@ const pool = new Pool({ connectionString: cfg.databaseUrl, ssl: { rejectUnauthor
 const DIRECTORY = `
   SELECT t.id AS teacher_id, t.name AS teacher, t.phone AS teacher_phone,
          s.id AS student_id, s.name AS student, s."waTag" AS tag, s.phone AS student_phone,
-         b.id AS batch_id, b.name AS batch, b."driveLink" AS drive_link
+         b.id AS batch_id, b.name AS batch, b."driveLink" AS drive_link,
+         b."meetLink" AS meet_link, b."scheduleSheetLink" AS schedule_sheet_link
   FROM "BatchStudent" bs
   JOIN "Batch" b ON b.id = bs."batchId"
   JOIN "User" t ON t.id = b."teacherId"
