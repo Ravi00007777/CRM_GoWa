@@ -129,6 +129,7 @@ test('the description is built from the batch links in the group\'s own format',
 });
 
 test('changed batch links rewrite the group description once', async () => {
+  process.env.GROUP_DESCRIPTIONS = 'on';
   pairs = [{ ...PAIR, meet_link: 'https://meet.google.com/x', drive_link: 'https://drive.google.com/new' }];
   rows = [row({ studentGroupJid: 'g@g.us', groupName: 'Renamed batch', groupTopicLink: null })];
   const writes = [];
@@ -144,6 +145,7 @@ test('changed batch links rewrite the group description once', async () => {
     await groups.reconcile(); // already written: nothing more
   } finally {
     people.pool.query = realQuery;
+    delete process.env.GROUP_DESCRIPTIONS;
   }
   assert.deepEqual(writes, [['student', 'g@g.us',
     'Join classes using this Google Meet link: https://meet.google.com/x\n\nAssignment and notes docs:\nhttps://drive.google.com/new']]);
@@ -170,4 +172,13 @@ test('a parent number added or changed later is added to the existing group, onc
     ['add', 'student', 'g@g.us', [PARENT]],
   ]);
   assert.equal(rows[0].parentJidAdded, PARENT);
+});
+
+test('group descriptions are left alone until GROUP_DESCRIPTIONS=on', async () => {
+  pairs = [{ ...PAIR, meet_link: 'https://meet.google.com/x' }];
+  rows = [row({ studentGroupJid: 'g@g.us', groupName: 'Renamed batch', groupTopicLink: null })];
+  let wrote = false;
+  gowa.setGroupTopic = async () => { wrote = true; };
+  await groups.reconcile();
+  assert.equal(wrote, false);
 });
