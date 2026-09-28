@@ -35,6 +35,10 @@ people.pool = {
       Object.assign(rows[0], { note: args[2] }, sql.includes('"wantsNewGroup" = false') ? { wantsNewGroup: false } : {});
       return { rowCount: 1 };
     }
+    if (sql.startsWith('UPDATE "WaConversation" SET "groupName" = $1')) {
+      Object.assign(rows[0], { groupName: args[0] }, args[3] ? { note: args[3] } : {});
+      return { rowCount: 1 };
+    }
     if (sql.startsWith('INSERT INTO "WaConversation"')) {
       Object.assign(rows[0], { studentGroupJid: args[3], wantsNewGroup: false, note: args[4], groupName: args[5], parentJidAdded: args[6] });
       return { rowCount: 1 };
@@ -181,4 +185,15 @@ test('group descriptions are left alone until GROUP_DESCRIPTIONS=on', async () =
   gowa.setGroupTopic = async () => { wrote = true; };
   await groups.reconcile();
   assert.equal(wrote, false);
+});
+
+test('a failed rename is noted once, not retried every pass', async () => {
+  rows = [row({ studentGroupJid: 'g@g.us', groupName: 'Old batch', groupTopicLink: null })];
+  gowa.renameGroup = async () => { throw new Error('not an admin'); };
+  await groups.reconcile();
+  assert.equal(rows[0].groupName, 'Renamed batch');
+  assert.match(rows[0].note, /Could not rename the WhatsApp group to "Renamed batch": not an admin/);
+  gowa.renameGroup = async (device, jid, name) => { calls.push(['rename', device, jid, name]); };
+  await groups.reconcile();
+  assert.equal(calls.filter((c) => c[0] === 'rename').length, 0);
 });

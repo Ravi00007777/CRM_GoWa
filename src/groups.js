@@ -164,6 +164,10 @@ async function reconcile() {
       refresh();
       console.log(`[groups] renamed ${pair.teacher} / ${pair.student} to "${pair.batch}"`);
     } catch (err) {
+      // Not retried every pass: one stuck group would stall every later rename, topic and parent sync.
+      await people.pool.query('UPDATE "WaConversation" SET "groupName" = $1, note = $4, "updatedAt" = now() WHERE "teacherId" = $2 AND "studentId" = $3',
+        [pair.batch, c.teacherId, c.studentId, `Could not rename the WhatsApp group to "${pair.batch}": ${err.message}. Rename it by hand in WhatsApp.`]);
+      refresh();
       console.error(`[groups] rename failed for ${pair.student}:`, err.message);
     }
     return; // one per pass
