@@ -113,12 +113,26 @@ test('a teacher on WhatsApp is pointed to the website; nothing is relayed or sav
   assert.equal(doubts.length, 0);
 });
 
-test('a parent message is saved to the doubt thread, redacted, and not sent on', async () => {
+test('a parent message is saved to the doubt thread and not sent on', async () => {
   reset(ASHA_DIYA);
-  await relay('912222222222@s.whatsapp.net', { id: 'm2', from: '251556368777322@lid', from_lid: S, body: 'done, call 98765 43210' });
+  await relay('912222222222@s.whatsapp.net', { id: 'm2', from: '251556368777322@lid', from_lid: S, body: 'done, q3 now' });
   assert.equal(sent.length, 0);
-  assert.deepEqual(doubts, [{ batchId: 'b-t1', studentId: 's1', body: 'done, call [number removed]', waMessageId: 'm2' }]);
+  assert.deepEqual(doubts, [{ batchId: 'b-t1', studentId: 's1', body: 'done, q3 now', waMessageId: 'm2' }]);
   assert.deepEqual([logged.at(-1).direction, logged.at(-1).status], ['STUDENT_TO_TEACHER', 'RELAYED']);
+});
+
+test('a doubt with a number, an email or payment talk is held back whole', async () => {
+  reset(ASHA_DIYA);
+  const held = ['done, call 98765 43210', 'mail me at a@b.com', 'sir fees kab dena hai?', 'I sent the payment on GPay',
+    'my UPI id is diya@okaxis', 'send to diya@ybl'];
+  for (const [i, body] of held.entries()) await relay('student', { id: `h${i}`, from: S, body });
+  assert.equal(doubts.length, 0);
+  assert.deepEqual(logged.map((l) => l.status), held.map(() => 'FLAGGED'));
+  assert.match(msg().message, /not passed on to the teacher/);
+
+  // Money in a maths problem is still a doubt.
+  await relay('student', { id: 'ok', from: S, body: 'A paid Rs 500 for a pen at 20% profit, what was the cost?' });
+  assert.equal(doubts.length, 1);
 });
 
 test('unknown sender: ignored, nothing sent, nothing logged', async () => {

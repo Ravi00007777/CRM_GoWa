@@ -4,7 +4,7 @@ const cfg = require('./config');
 const people = require('./people');
 const groups = require('./groups');
 const gowa = require('./gowa');
-const { redact, toJid } = require('./redact');
+const { redact, mentionsPayment, toJid } = require('./redact');
 
 function verifySignature(rawBody, header, secret = cfg.webhookSecret) {
   if (!rawBody || !header) return false;
@@ -82,10 +82,13 @@ async function saveFromStudent({ pair, p, m, body, reply, log }) {
     log('[file dropped: only text is passed on]', 'DROPPED');
     return reply(DRIVE_ONLY);
   }
-  const { text, flagged } = redact(body);
-  if (flagged) {
+  // Anything with contact details or about payments is held back whole, not just redacted:
+  // the rest of such a message is rarely a real doubt, and the teacher should never see it.
+  const { text } = redact(body);
+  if (text !== body || mentionsPayment(body)) {
     log(text, 'FLAGGED');
-    return reply('That message was not passed on: it looked like a phone number or email address.');
+    return reply('That message was not passed on to the teacher: messages with phone numbers, email ' +
+      'addresses or payment details are not allowed. For fees and payments, please contact the AlmaEd team.');
   }
   if (!text.trim()) return;
   await people.saveDoubt({ batchId: pair.batch_id, studentId: pair.student_id, body: text, waMessageId: p.id });

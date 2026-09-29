@@ -9,6 +9,14 @@ const JID = /\d+(?::\d+)?@(?:s\.whatsapp\.net|lid|c\.us)/gi;
 
 const MARK = /\[(?:number|email|link) removed\]/g;
 
+// Fees and payments are between the family and AlmaEd, never the teacher.
+// ponytail: keyword list; deliberately leaves out "pay", "paid", "rs" and "₹", which turn up in maths
+// word problems. Add words here as real payment messages slip through.
+const PAYMENT = /\b(?:fees?|payments?|upi|g-?pay|google ?pay|phone ?pe|paytm|bhim|ifsc|bank (?:account|details|transfer)|account (?:number|no)|a\/c|refund|transaction|send money|qr code)\b/i;
+// A UPI ID: like an email but with no dot after the @ ("diya@okaxis", "98765@ybl").
+const UPI_ID = /[\w.-]{2,}@[a-z]{2,}\b(?!\.)/i;
+const mentionsPayment = (s) => PAYMENT.test(String(s ?? '')) || UPI_ID.test(String(s ?? ''));
+
 // Returns { text, flagged }. flagged = something was removed AND nothing meaningful is left -> don't relay.
 function redact(input) {
   const raw = String(input ?? '');
@@ -41,4 +49,4 @@ function toJid(value, countryCode) {
   return `${digits}@s.whatsapp.net`;
 }
 
-module.exports = { redact, assertSafeOutbound, toJid };
+module.exports = { redact, mentionsPayment, assertSafeOutbound, toJid };
