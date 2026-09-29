@@ -52,6 +52,9 @@ const STUDENT_GROUP = '120363000000000002@g.us';
 groups.sideOfGroup = async (jid) => ({ teacherId: 't1', studentId: 's1', isTeacher: jid === TEACHER_GROUP });
 people.pairOf = async (t, st) => pairs.find((x) => x.teacher_id === t && x.student_id === st);
 
+// The relay number's own ids, as a mention of it appears in group text: phone and LID.
+require('../src/gowa').ownIds = async () => ['912222222222', '112451588780049'];
+
 const { relay, verifySignature, handleWebhook } = require('../src/relay');
 
 const sent = [];
@@ -194,7 +197,7 @@ async function groupMessage(chat, payload) {
 
 test('student group: the parent\'s message goes to the doubt thread; others in the group are ignored', async () => {
   reset(ASHA_DIYA);
-  assert.equal(await groupMessage(STUDENT_GROUP, { id: 'g1', participant: S, body: 'what is q3?' }), 200);
+  assert.equal(await groupMessage(STUDENT_GROUP, { id: 'g1', participant: S, body: '@912222222222 what is q3?' }), 200);
   assert.deepEqual(doubts, [{ batchId: 'b-t1', studentId: 's1', body: 'what is q3?', waMessageId: 'g1' }]);
   await groupMessage(STUDENT_GROUP, { id: 'g2', participant: '910000000000@s.whatsapp.net', body: 'admin note' });
   assert.equal(doubts.length, 1);
@@ -217,6 +220,17 @@ test('in the student group, the parent\'s messages stay out of the teacher\'s do
   assert.equal(sent.length, 0);
   assert.equal(logged.at(-1).status, 'DROPPED');
 
-  await groupMessage(STUDENT_GROUP, { id: 'g6', participant: S, body: 'what is q4?' });
+  await groupMessage(STUDENT_GROUP, { id: 'g6', participant: S, body: '@112451588780049 what is q4?' });
   assert.deepEqual(doubts.map((d) => d.body), ['what is q4?']);
+});
+
+test('in the student group, only a message that tags the relay number becomes a doubt', async () => {
+  reset(ASHA_DIYA);
+  await groupMessage(STUDENT_GROUP, { id: 't1', participant: S, body: 'ok sir, will do' });
+  await groupMessage(STUDENT_GROUP, { id: 't2', participant: S, body: 'mail 912222222222@x.com' });
+  assert.equal(doubts.length, 0);
+  assert.equal(sent.length, 0);
+
+  await groupMessage(STUDENT_GROUP, { id: 't3', participant: S, body: 'sir @912222222222 why is Q3 wrong?' });
+  assert.deepEqual(doubts.map((d) => d.body), ['sir why is Q3 wrong?']);
 });

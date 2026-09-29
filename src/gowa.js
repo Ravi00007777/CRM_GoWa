@@ -121,4 +121,16 @@ async function roleOfDevice(deviceId) {
   return match();
 }
 
-module.exports = { sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants, joinGroupWithLink, leaveGroup, setGroupTopic, addParticipants, removeParticipants };
+// The user parts a device is known by in groups: its phone number and its LID. A mention of it
+// shows up in message text as "@<one of these>". Cached; both only change if the number is re-paired.
+const ownIdCache = {};
+async function ownIds(device) {
+  if (ownIdCache[device]) return ownIdCache[device];
+  const devices = (await call('/devices', { method: 'GET' })) || [];
+  const phone = userPart(devices.find((d) => d.id === device)?.jid);
+  if (!phone) throw new Error(`gowa has no paired number for device ${device}`);
+  const info = await call(`/user/info?phone=${phone}`, { method: 'GET', device });
+  return (ownIdCache[device] = [phone, userPart(info?.resolved_lid)].filter(Boolean));
+}
+
+module.exports = { ownIds, sendText, sendFile, fetchMedia, alertAdmin, roleOfDevice, createGroup, renameGroup, groupParticipants, joinGroupWithLink, leaveGroup, setGroupTopic, addParticipants, removeParticipants };
