@@ -10,7 +10,7 @@ const path = require('node:path');
 const cfg = require('./config');
 const gowa = require('./gowa');
 const people = require('./people');
-const { redact } = require('./redact');
+const { redact, mentionsPayment } = require('./redact');
 
 const q = (sql, args) => people.pool.query(sql, args);
 
@@ -50,7 +50,9 @@ const log = (row, content, status, outId) => people.log({
 
 async function sendDoubt(row) {
   if (!(await claim('DoubtMessage', row.id))) return; // another pass got it first
-  const { text, flagged } = redact(row.body || '');
+  const { text, flagged: contactOnly } = redact(row.body || '');
+  // Payment talk never reaches the student group; the website refuses it too, this is the backstop.
+  const flagged = contactOnly || mentionsPayment(row.body);
   const body = text.trim() || (row.imageUrl ? '[sent an image on the AlmaEd website]' : '');
   if (flagged || !body) {
     await mark('DoubtMessage', row.id, `skipped:${row.id}`);

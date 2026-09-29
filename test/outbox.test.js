@@ -67,6 +67,16 @@ test('a message that is only a phone number is not sent, and is not retried', as
   assert.equal(logged[0].status, 'FLAGGED');
 });
 
+test('a teacher message about fees or payment is never sent to the student group', async () => {
+  doubts = [doubt('d3', 'Please clear the fees by Friday, UPI is fine')];
+  await outbox.flush();
+  await outbox.flush();
+
+  assert.equal(sent.length, 0);
+  assert.equal(doubts[0].waMessageId, 'skipped:d3');
+  assert.equal(logged[0].status, 'FLAGGED');
+});
+
 test('a Google Drive resource goes to every student group as its link, not a download', async () => {
   const resources = [{ id: 'r1', title: 'Chapter 4', type: 'ASSIGNMENT', fileUrl: 'https://drive.google.com/file/d/abc/view', dueAt: null, teacherId: 't1', teacher: 'Vishwas', waMessageId: null }];
   const realQuery = people.pool.query;
