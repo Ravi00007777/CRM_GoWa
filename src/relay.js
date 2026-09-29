@@ -84,11 +84,12 @@ async function saveFromStudent({ pair, p, m, body, reply, log }) {
   }
   // Anything with contact details or about payments is held back whole, not just redacted:
   // the rest of such a message is rarely a real doubt, and the teacher should never see it.
+  // Payment talk is skipped silently: no reply in the group, only the log records it.
   const { text } = redact(body);
-  if (text !== body || mentionsPayment(body)) {
+  if (mentionsPayment(body)) return log(text, 'FLAGGED');
+  if (text !== body) {
     log(text, 'FLAGGED');
-    return reply('That message was not passed on to the teacher: messages with phone numbers, email ' +
-      'addresses or payment details are not allowed. For fees and payments, please contact the AlmaEd team.');
+    return reply('That message was not passed on to the teacher: phone numbers and email addresses are not allowed.');
   }
   if (!text.trim()) return;
   await people.saveDoubt({ batchId: pair.batch_id, studentId: pair.student_id, body: text, waMessageId: p.id });

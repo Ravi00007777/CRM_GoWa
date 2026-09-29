@@ -128,6 +128,8 @@ test('a doubt with a number, an email or payment talk is held back whole', async
   for (const [i, body] of held.entries()) await relay('student', { id: `h${i}`, from: S, body });
   assert.equal(doubts.length, 0);
   assert.deepEqual(logged.map((l) => l.status), held.map(() => 'FLAGGED'));
+  // Only the number and the email got a reply; payment talk is skipped silently.
+  assert.equal(sent.length, 2);
   assert.match(msg().message, /not passed on to the teacher/);
 
   // Money in a maths problem is still a doubt.
