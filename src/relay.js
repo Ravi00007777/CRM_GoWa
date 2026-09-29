@@ -137,8 +137,8 @@ async function relayGroup(chatJid, p) {
     log('[teacher wrote on WhatsApp; not relayed]', 'DROPPED');
     return reply(WEBSITE_ONLY);
   }
-  // A doubt is only a message that tags the relay number ("@AlmaEd"); everything else is ordinary
-  // group chat and stays in the group. WhatsApp writes a mention into the text as "@<number or LID>",
+  // A doubt is only a message that tags the relay number (the group is student + relay + admin);
+  // everything else stays in the group. WhatsApp writes a mention into the text as "@<number or LID>",
   // and the tag is taken out before saving so the relay's own number is not mistaken for contact info.
   const ids = await gowa.ownIds(cfg.studentDevice);
   const tag = new RegExp(`@(?:${ids.join('|')})(?!\\d)\\s*`, 'g');
