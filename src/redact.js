@@ -37,9 +37,11 @@ const GIVE = words([
 ]);
 // A UPI ID: like an email but with no dot after the @ ("diya@okaxis", "98765@ybl").
 const UPI_ID = /[\w.-]{2,}@[a-z]{2,}\b(?!\.)/i;
-function mentionsPayment(input) {
+// strict (a teacher writing): any money word is enough. Teachers have no reason to mention money
+// to a student, and a false alarm only costs them a rephrase.
+function mentionsPayment(input, { strict = false } = {}) {
   const s = String(input ?? '');
-  return PAYMENT.test(s) || UPI_ID.test(s) || (MONEY.test(s) && GIVE.test(s));
+  return PAYMENT.test(s) || UPI_ID.test(s) || (MONEY.test(s) && (strict || GIVE.test(s)));
 }
 
 // Returns { text, flagged }. flagged = something was removed AND nothing meaningful is left -> don't relay.

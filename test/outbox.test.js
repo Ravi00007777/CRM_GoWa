@@ -77,6 +77,15 @@ test('a teacher message about fees or payment is never sent to the student group
   assert.equal(logged[0].status, 'FLAGGED');
 });
 
+test('from a teacher, any money word is enough to hold a message back', async () => {
+  doubts = ['beta paise bhej do', 'paise bhej bhai', 'money', '500 rupees', 'पैसे'].map((b, i) => doubt(`m${i}`, b));
+  doubts.push(doubt('ok', 'Homework: page 12'));
+  await outbox.flush();
+
+  assert.equal(sent.length, 1);
+  assert.match(sent[0].body.message, /Homework/);
+});
+
 test('a Google Drive resource goes to every student group as its link, not a download', async () => {
   const resources = [{ id: 'r1', title: 'Chapter 4', type: 'ASSIGNMENT', fileUrl: 'https://drive.google.com/file/d/abc/view', dueAt: null, teacherId: 't1', teacher: 'Vishwas', waMessageId: null }];
   const realQuery = people.pool.query;

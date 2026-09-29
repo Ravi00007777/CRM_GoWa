@@ -52,7 +52,7 @@ async function sendDoubt(row) {
   if (!(await claim('DoubtMessage', row.id))) return; // another pass got it first
   const { text, flagged: contactOnly } = redact(row.body || '');
   // Payment talk never reaches the student group; the website refuses it too, this is the backstop.
-  const flagged = contactOnly || mentionsPayment(row.body);
+  const flagged = contactOnly || mentionsPayment(row.body, { strict: true });
   const body = text.trim() || (row.imageUrl ? '[sent an image on the AlmaEd website]' : '');
   if (flagged || !body) {
     await mark('DoubtMessage', row.id, `skipped:${row.id}`);
