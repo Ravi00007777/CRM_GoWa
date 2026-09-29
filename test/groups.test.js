@@ -39,6 +39,10 @@ people.pool = {
       Object.assign(rows[0], { groupName: args[0] }, args[3] ? { note: args[3] } : {});
       return { rowCount: 1 };
     }
+    if (sql.startsWith('UPDATE "WaConversation" SET "removeGroup" = false')) {
+      Object.assign(rows[0], { removeGroup: false, studentGroupJid: null, teacherGroupJid: null, existingGroup: false });
+      return { rowCount: 1 };
+    }
     if (sql.startsWith('INSERT INTO "WaConversation"')) {
       Object.assign(rows[0], { studentGroupJid: args[3], wantsNewGroup: false, note: args[4], groupName: args[5], parentJidAdded: args[6] });
       return { rowCount: 1 };
@@ -196,4 +200,25 @@ test('a failed rename is noted once, not retried every pass', async () => {
   gowa.renameGroup = async (device, jid, name) => { calls.push(['rename', device, jid, name]); };
   await groups.reconcile();
   assert.equal(calls.filter((c) => c[0] === 'rename').length, 0);
+});
+
+test('a removed batch: the relay empties its group (keeping itself and admin), leaves, and forgets it', async () => {
+  rows = [row({ studentGroupJid: 'g@g.us', removeGroup: true })];
+  gowa.ownIds = async () => ['912222222222', '112451588780049'];
+  gowa.groupParticipants = async () => ['912222222222@s.whatsapp.net', '910000000000@s.whatsapp.net', PAIR.student_jid, PARENT];
+  await groups.reconcile();
+
+  assert.deepEqual(calls.filter((c) => c[0] !== 'alert'), [
+    ['remove', 'student', 'g@g.us', [PAIR.student_jid, PARENT]],
+    ['leave', 'student', 'g@g.us'],
+  ]);
+  assert.equal(rows[0].studentGroupJid, null);
+  assert.equal(rows[0].removeGroup, false);
+});
+
+test('a removed batch with a family\'s own linked group: the relay only leaves', async () => {
+  rows = [row({ studentGroupJid: 'g@g.us', existingGroup: true, removeGroup: true })];
+  await groups.reconcile();
+  assert.deepEqual(calls, [['leave', 'student', 'g@g.us']]);
+  assert.equal(rows[0].studentGroupJid, null);
 });

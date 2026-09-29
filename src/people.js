@@ -11,7 +11,8 @@ const pool = new Pool({ connectionString: cfg.databaseUrl, ssl: { rejectUnauthor
 
 // A teacher is reachable if they are active and have a phone. A student has their own number
 // (student_jid: what they send lands in the teacher's doubt chat) and optionally a parent's
-// (parent_jid: in the group to follow along, never relayed). Batch membership is the assignment.
+// (parent_jid: in the group to follow along, never relayed). Batch membership is the assignment;
+// a removed (archived) batch is no assignment at all.
 const DIRECTORY = `
   SELECT t.id AS teacher_id, t.name AS teacher, t.phone AS teacher_phone,
          s.id AS student_id, s.name AS student, s."waTag" AS tag, s.phone AS student_phone,
@@ -22,7 +23,7 @@ const DIRECTORY = `
   JOIN "Batch" b ON b.id = bs."batchId"
   JOIN "User" t ON t.id = b."teacherId"
   JOIN "User" s ON s.id = bs."studentId"
-  WHERE t."isActive" AND s."isActive"
+  WHERE t."isActive" AND s."isActive" AND b."archivedAt" IS NULL
     AND t.phone IS NOT NULL AND s.phone IS NOT NULL AND s."waTag" IS NOT NULL
   ORDER BY s."waTag"`;
 

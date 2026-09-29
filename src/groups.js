@@ -14,7 +14,7 @@ const gowa = require('./gowa');
 const people = require('./people');
 
 const SELECT = `SELECT "teacherId", "studentId", "teacherGroupJid", "studentGroupJid", note, "groupName",
-    "studentGroupInvite", "existingGroup", "wantsNewGroup", "groupTopicLink", "parentJidAdded"
+    "studentGroupInvite", "existingGroup", "wantsNewGroup", "groupTopicLink", "parentJidAdded", "removeGroup"
   FROM "WaConversation"`;
 
 let cache = { at: 0, rows: [] };
@@ -38,6 +38,28 @@ async function sideOfGroup(jid) {
 }
 
 const adminJid = () => cfg.adminJid;
+const userPart = (j) => String(j ?? '').split('@')[0].split(':')[0];
+
+// Admin removed the batch. WhatsApp has no "delete group", so the relay empties it (everyone but
+// itself and admin) and leaves; a family's own linked group is only left, never emptied. Then the
+// ids are cleared, so the student can get a fresh group if they join another batch.
+async function removeGroups(c) {
+  const sides = [[cfg.studentDevice, c.studentGroupJid, !c.existingGroup], [cfg.teacherDevice, c.teacherGroupJid, true]];
+  for (const [device, jid, empty] of sides) {
+    if (!jid) continue;
+    if (empty) {
+      const keep = [...(await gowa.ownIds(device)), userPart(adminJid())];
+      const others = (await gowa.groupParticipants(device, jid)).filter((p) => !keep.includes(userPart(p)));
+      if (others.length) await gowa.removeParticipants(device, jid, others);
+    }
+    await gowa.leaveGroup(device, jid);
+  }
+}
+
+const CLEARED = `UPDATE "WaConversation" SET "removeGroup" = false, "studentGroupJid" = NULL, "teacherGroupJid" = NULL,
+    "existingGroup" = false, "wantsNewGroup" = false, "groupName" = NULL, "groupTopicLink" = NULL,
+    "parentJidAdded" = NULL, note = NULL, "updatedAt" = now()
+  WHERE "teacherId" = $1 AND "studentId" = $2`;
 
 // Creates the student group for one pair. Anyone WhatsApp refuses to add - their "who can add me
 // to groups" setting - is recorded rather than swallowed, because the group otherwise looks
@@ -107,6 +129,23 @@ const setNote = async (c, note, extra = '') => {
 // batch exists. Creating a group is slow and rate-limited by WhatsApp, so one per pass.
 async function reconcile() {
   const existing = await conversations();
+
+  // Removed batches first: nothing else should touch a group that is going away.
+  for (const c of existing) {
+    if (!c.removeGroup) continue;
+    try {
+      await removeGroups(c);
+      console.log(`[groups] removed the groups of ${c.teacherId} / ${c.studentId}`);
+    } catch (err) {
+      // Not retried every pass: the batch page is gone, so admin is told on WhatsApp instead.
+      console.error(`[groups] could not remove the groups of ${c.teacherId} / ${c.studentId}:`, err.message);
+      await gowa.alertAdmin(`A removed batch's WhatsApp group could not be emptied (${err.message}). ` +
+        'Remove the student and parent from it by hand.').catch(() => {});
+    }
+    await people.pool.query(CLEARED, [c.teacherId, c.studentId]);
+    refresh();
+    return; // one per pass
+  }
 
   // Existing groups admin linked come first, so no new group is made for those students.
   for (const c of existing) {

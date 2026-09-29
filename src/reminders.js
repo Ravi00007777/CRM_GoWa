@@ -18,7 +18,7 @@ const DUE = `
   FROM "Class" c JOIN "Batch" b ON b.id = c."batchId" JOIN "User" t ON t.id = b."teacherId"
   WHERE c.status = 'SCHEDULED' AND c."teacherWaRemindedAt" IS NULL
     AND c."scheduledAt" > now() AND c."scheduledAt" <= now() + interval '3 hours'
-    AND t."isActive" AND t.phone IS NOT NULL
+    AND t."isActive" AND t.phone IS NOT NULL AND b."archivedAt" IS NULL
   ORDER BY c."scheduledAt" LIMIT 10`;
 
 const ist = (d) => new Date(d).toLocaleString('en-IN', {

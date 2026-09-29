@@ -22,12 +22,13 @@ const PENDING_DOUBTS = `
   JOIN "User" t ON t.id = b."teacherId"
   JOIN "WaConversation" c ON c."teacherId" = b."teacherId" AND c."studentId" = d."studentId"
   WHERE d."waMessageId" IS NULL AND d."senderId" = b."teacherId" AND c."studentGroupJid" IS NOT NULL
+    AND b."archivedAt" IS NULL AND NOT c."removeGroup"
   ORDER BY d."createdAt" LIMIT 20`;
 
 const PENDING_RESOURCES = `
   SELECT r.id, r.title, r.type, r."fileUrl", r."dueAt", b."teacherId", t.name AS teacher
   FROM "Resource" r JOIN "Batch" b ON b.id = r."batchId" JOIN "User" t ON t.id = b."teacherId"
-  WHERE r."waMessageId" IS NULL ORDER BY r."createdAt" LIMIT 5`;
+  WHERE r."waMessageId" IS NULL AND b."archivedAt" IS NULL ORDER BY r."createdAt" LIMIT 5`;
 
 const GROUPS_OF_RESOURCE = `
   SELECT c."studentId", c."studentGroupJid" FROM "Resource" r
