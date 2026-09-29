@@ -9,13 +9,38 @@ const JID = /\d+(?::\d+)?@(?:s\.whatsapp\.net|lid|c\.us)/gi;
 
 const MARK = /\[(?:number|email|link) removed\]/g;
 
-// Fees and payments are between the family and AlmaEd, never the teacher.
-// ponytail: keyword list; deliberately leaves out "pay", "paid", "rs" and "₹", which turn up in maths
-// word problems. Add words here as real payment messages slip through.
-const PAYMENT = /\b(?:fees?|payments?|upi|g-?pay|google ?pay|phone ?pe|paytm|bhim|ifsc|bank (?:account|details|transfer)|account (?:number|no)|a\/c|refund|transaction|send money|qr code)\b/i;
+// Fees and payments are between the family and AlmaEd, never teacher and student. Kept in step
+// with src/lib/contact-filter.ts on the website.
+// ponytail: word lists, not understanding. A message is payment talk if it has a payment word, or
+// a money word together with a send/give word ("paise bhej do", "₹500 transfer karo", "টাকা পাঠাও").
+// Money words alone ("50 paise ka sikka", "paid Rs 500 for a pen") are left alone: they turn up
+// in maths problems. Add words as real payment messages slip through; an AI check if lists can't keep up.
+// Word edges are Unicode-aware, since \b only understands English letters.
+const words = (alts) => new RegExp(`(?<![\\p{L}\\p{M}\\p{N}])(?:${alts.join('|')})(?![\\p{L}\\p{M}])`, 'iu');
+const SUFFIX = '[\\p{L}\\p{M}]*';
+const PAYMENT = words([
+  'fees?', 'payments?', 'upi', 'g-?pay', 'google ?pay', 'phone ?pe', 'paytm', 'bhim', 'ifsc',
+  'bank (?:account|details|transfer)', 'account (?:number|no)', 'a/c', 'refund', 'transaction', 'send money', 'qr code',
+  'फीस', 'शुल्क', 'भुगतान', 'पेमेंट', 'ফি', 'পেমেন্ট',
+]);
+const MONEY = words([
+  'pais[ae]y?', 'paiso', 'pe?ise', 'rupa[iy]?y?e', 'rupaiya', 'rupiy?a', 'rupya', 'rupees?', 'rs\\.?', 'inr', 'money', 'cash', '₹',
+  'पैस' + SUFFIX, 'रुपये', 'रुपए', 'रुपया', 'रूपये', 'रूपए', 'रकम', 'টাকা', 'పైసలు', 'డబ్బు' + SUFFIX, 'பணம்', 'காசு', 'ಹಣ',
+  'പണം', 'પૈસા', 'રૂપિયા', 'ਪੈਸੇ', 'ਰੁਪਏ', 'پیسے', 'روپے',
+]);
+const GIVE = words([
+  'bhej' + SUFFIX, 'send' + SUFFIX, 'sent', 'transfer' + SUFFIX, 'de ?do', 'de ?dena', 'dijiye', 'dena', 'dene',
+  'jama', 'deposit' + SUFFIX, 'chahiye', 'lage?ga', 'lagenge', 'bharo', 'bharna',
+  'भेज' + SUFFIX, 'दे ?दो', 'दीजिए', 'देना', 'जमा', 'चाहिए', 'भरो', 'পাঠা' + SUFFIX, 'দাও', 'দিন',
+  'அனுப்ப' + SUFFIX, 'கொடு' + SUFFIX, 'పంప' + SUFFIX, 'ఇవ్వ' + SUFFIX, 'ಕಳುಹಿಸ' + SUFFIX, 'ಕೊಡ' + SUFFIX,
+  'അയക്ക' + SUFFIX, 'મોકલ' + SUFFIX, 'આપો', 'ਭੇਜ' + SUFFIX, 'بھیج' + SUFFIX, 'دے دو',
+]);
 // A UPI ID: like an email but with no dot after the @ ("diya@okaxis", "98765@ybl").
 const UPI_ID = /[\w.-]{2,}@[a-z]{2,}\b(?!\.)/i;
-const mentionsPayment = (s) => PAYMENT.test(String(s ?? '')) || UPI_ID.test(String(s ?? ''));
+function mentionsPayment(input) {
+  const s = String(input ?? '');
+  return PAYMENT.test(s) || UPI_ID.test(s) || (MONEY.test(s) && GIVE.test(s));
+}
 
 // Returns { text, flagged }. flagged = something was removed AND nothing meaningful is left -> don't relay.
 function redact(input) {

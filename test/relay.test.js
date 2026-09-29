@@ -10,7 +10,7 @@ Object.assign(process.env, {
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
-const { redact, assertSafeOutbound, toJid } = require('../src/redact');
+const { redact, mentionsPayment, assertSafeOutbound, toJid } = require('../src/redact');
 
 // Stub the directory before relay.js is loaded. relay.js calls people.x() rather than
 // destructuring, so replacing the exports here is enough.
@@ -88,6 +88,18 @@ test('redact: phone shapes, emails, wa links; keeps normal text', () => {
     { text: 'call me on [number removed] after class', flagged: false });
   const keep = 'Class at 5:30 pm, test 45/50, meet.google.com/abc-defg-hij';
   assert.deepEqual(redact(keep), { text: keep, flagged: false });
+});
+
+test('payment talk is caught in English, Hinglish and Indian scripts; maths money is not', () => {
+  for (const s of ['beta paise bhej do', 'Beta paisa bhejdo aaj', 'sir 500 rupaye transfer kar do', 'please send the money',
+    '₹2000 jama kar dena', 'fees kab dena hai', 'बेटा पैसे भेज दो', 'मम्मी से रुपये भेजने को बोलो', 'फीस जमा करो',
+    'টাকা পাঠাও', 'பணம் அனுப்புங்கள்', 'డబ్బు పంపండి', 'ਪੈਸੇ ਭੇਜ ਦਿਓ', 'پیسے بھیج دو', 'my upi is ravi@ybl']) {
+    assert.equal(mentionsPayment(s), true, s);
+  }
+  for (const s of ['A paid Rs 500 for a pen at 20% profit, what was the cost?', '50 paise ka sikka kitna bhari hai?',
+    'एक पेन 20 रुपये का है, 5 पेन का दाम?', 'x को y के रूप में लिखो', 'send me the notes of chapter 3', 'what is q3?']) {
+    assert.equal(mentionsPayment(s), false, s);
+  }
 });
 
 test('outbound guard and JID normalisation', () => {
