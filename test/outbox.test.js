@@ -20,6 +20,7 @@ people.pool = {
       return { rows: doubts.filter((d) => d.waMessageId === null).map((d) => ({ ...d, studentGroupJid: GROUP })) };
     }
     if (sql.includes('FROM "Resource" r JOIN')) return { rows: [] };
+    if (sql.includes('FROM "WaNotice"')) return { rows: [] };
     if (sql.startsWith('UPDATE "DoubtMessage"') && sql.includes('IS NULL')) {
       const d = doubts.find((x) => x.id === args[0] && x.waMessageId === null);
       if (d) d.waMessageId = args[1];
