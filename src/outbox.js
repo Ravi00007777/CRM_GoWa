@@ -10,7 +10,7 @@ const path = require('node:path');
 const cfg = require('./config');
 const gowa = require('./gowa');
 const people = require('./people');
-const { redact, mentionsPayment, toJid } = require('./redact');
+const { redact, mentionsPayment } = require('./redact');
 
 const q = (sql, args) => people.pool.query(sql, args);
 
@@ -36,19 +36,6 @@ const GROUPS_OF_RESOURCE = `
   JOIN "BatchStudent" bs ON bs."batchId" = r."batchId"
   JOIN "WaConversation" c ON c."teacherId" = b."teacherId" AND c."studentId" = bs."studentId"
   WHERE r.id = $1 AND c."studentGroupJid" IS NOT NULL`;
-
-// Schedule messages the site writes when admin adds, moves or cancels classes (WaNotice).
-const PENDING_NOTICES = `
-  SELECT n.id, n.body, n."batchId", t.phone AS teacher_phone
-  FROM "WaNotice" n JOIN "Batch" b ON b.id = n."batchId" JOIN "User" t ON t.id = b."teacherId"
-  WHERE n."waMessageId" IS NULL AND b."archivedAt" IS NULL AND t."isActive"
-  ORDER BY n."createdAt" LIMIT 10`;
-
-const GROUPS_OF_BATCH = `
-  SELECT c."studentGroupJid" FROM "BatchStudent" bs
-  JOIN "Batch" b ON b.id = bs."batchId"
-  JOIN "WaConversation" c ON c."teacherId" = b."teacherId" AND c."studentId" = bs."studentId"
-  WHERE bs."batchId" = $1 AND c."studentGroupJid" IS NOT NULL AND NOT c."removeGroup"`;
 
 async function claim(table, id) {
   const { rowCount } = await q(
@@ -108,32 +95,10 @@ async function sendResource(row) {
   await mark('Resource', row.id, `sent:${row.id}`);
 }
 
-// A schedule message goes to every student group of the batch (student + admin + relay
-// number) from the student-facing number, and straight to the teacher from the teacher-facing one.
-async function sendNotice(row) {
-  if (!(await claim('WaNotice', row.id))) return;
-  const { rows } = await q(GROUPS_OF_BATCH, [row.batchId]);
-  for (const g of rows) {
-    await gowa.sendText(cfg.studentDevice, g.studentGroupJid, row.body)
-      .catch((err) => console.error(`[outbox] notice ${row.id} to ${g.studentGroupJid} failed:`, err.message));
-  }
-  if (row.teacher_phone) {
-    try {
-      await gowa.sendText(cfg.teacherDevice, toJid(row.teacher_phone, cfg.countryCode), row.body);
-    } catch (err) {
-      console.error(`[outbox] notice ${row.id} to the teacher failed:`, err.message);
-    }
-  }
-  await mark('WaNotice', row.id, `sent:${row.id}`);
-}
-
-// One pass: doubts first (short, time-sensitive), then schedule messages, then files.
+// One pass: doubts first (short, time-sensitive), then files.
 async function flush() {
   for (const row of (await q(PENDING_DOUBTS)).rows) {
     await sendDoubt(row).catch((err) => console.error(`[outbox] doubt ${row.id} failed:`, err.message));
-  }
-  for (const row of (await q(PENDING_NOTICES)).rows) {
-    await sendNotice(row).catch((err) => console.error(`[outbox] notice ${row.id} failed:`, err.message));
   }
   for (const row of (await q(PENDING_RESOURCES)).rows) {
     await sendResource(row).catch((err) => console.error(`[outbox] resource ${row.id} failed:`, err.message));
