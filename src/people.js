@@ -1,7 +1,12 @@
 // The relay's view of AlmaEd. Teachers, students and who teaches whom live in AlmaEd's
 // Postgres (Supabase); this module reads them and writes the relayed-message log back.
 // Nothing here owns data - admin edits everything on the AlmaEd site.
-const { Pool } = require('pg');
+const { Pool, types } = require('pg');
+
+// AlmaEd's timestamps are "timestamp without time zone" holding UTC (Prisma's default). pg would
+// read them as this machine's local time (IST on the Mac), putting every class 5½ hours early in
+// messages; read them as the UTC they are.
+types.setTypeParser(types.builtins.TIMESTAMP, (s) => new Date(`${s.replace(' ', 'T')}Z`));
 const cfg = require('./config');
 const { toJid } = require('./redact');
 

@@ -48,3 +48,10 @@ test('the teacher and each student group get one WhatsApp reminder per class', a
 test('short lead times read in minutes', () => {
   assert.match(reminderText({ scheduledAt: new Date(Date.now() + 45 * 60000), batch: 'B', meetLink: 'x' }), /in about (44|45) min/);
 });
+
+test('database timestamps are read as UTC, so a 11:30 UTC class shows as 5:00 pm IST', () => {
+  const { types } = require('pg');
+  const at = types.getTypeParser(types.builtins.TIMESTAMP)('2026-10-06 11:30:00.000');
+  assert.equal(at.toISOString(), '2026-10-06T11:30:00.000Z');
+  assert.match(reminderText({ scheduledAt: at, batch: 'B', meetLink: 'x' }, at.getTime() - 3 * 3600e3), /5:00 pm IST \(in about 3 h 0 min\)/);
+});
