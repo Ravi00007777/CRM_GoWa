@@ -1,7 +1,8 @@
 // Class reminders.
-// - Every minute: WhatsApp each teacher (from the teacher-facing number) about a class starting
-//   within the next 3 hours, so they can prepare. Each class is claimed before sending, so a
-//   teacher gets one reminder per class even across restarts.
+// - Every minute: WhatsApp about each class starting within the next 3 hours: the teacher
+//   directly (from the teacher-facing number), so they can prepare, and every student group of
+//   the batch (from the student-facing number). Each class is claimed before sending, so
+//   everyone gets one reminder per class even across restarts.
 // - Every 5 minutes: call the AlmaEd site's reminder job, which emails teacher and students and
 //   rolls weekly classes forward. The relay is always on, unlike GitHub's scheduler, which
 //   only fires every few hours.
@@ -13,12 +14,12 @@ const { toJid } = require('./redact');
 const q = (sql, args) => people.pool.query(sql, args);
 
 const DUE = `
-  SELECT c.id, c."scheduledAt", c.topic, b.name AS batch,
+  SELECT c.id, c."batchId", c."scheduledAt", c.topic, b.name AS batch,
          COALESCE(c."meetLink", b."meetLink") AS "meetLink", t.name AS teacher, t.phone
   FROM "Class" c JOIN "Batch" b ON b.id = c."batchId" JOIN "User" t ON t.id = b."teacherId"
   WHERE c.status = 'SCHEDULED' AND c."teacherWaRemindedAt" IS NULL
     AND c."scheduledAt" > now() AND c."scheduledAt" <= now() + interval '3 hours'
-    AND t."isActive" AND t.phone IS NOT NULL AND b."archivedAt" IS NULL
+    AND t."isActive" AND b."archivedAt" IS NULL
   ORDER BY c."scheduledAt" LIMIT 10`;
 
 const ist = (d) => new Date(d).toLocaleString('en-IN', {
@@ -33,15 +34,32 @@ function reminderText(row, now = Date.now()) {
     `Please prepare for the class.\nJoin: ${row.meetLink}`;
 }
 
+// The batch's student groups: student, admin and the relay number.
+const GROUPS_OF_BATCH = `
+  SELECT c."studentGroupJid" FROM "BatchStudent" bs
+  JOIN "Batch" b ON b.id = bs."batchId"
+  JOIN "WaConversation" c ON c."teacherId" = b."teacherId" AND c."studentId" = bs."studentId"
+  WHERE bs."batchId" = $1 AND c."studentGroupJid" IS NOT NULL AND NOT c."removeGroup"`;
+
+function studentReminderText(row, now = Date.now()) {
+  return reminderText(row, now).replace('Please prepare for the class.', 'Please join a few minutes early.') + '\n\nTeam AlmaED';
+}
+
 async function remindTeachers() {
   for (const row of (await q(DUE)).rows) {
     const { rowCount } = await q(
       'UPDATE "Class" SET "teacherWaRemindedAt" = now() WHERE id = $1 AND "teacherWaRemindedAt" IS NULL', [row.id]);
     if (rowCount !== 1) continue; // another pass got it
-    try {
-      await gowa.sendText(cfg.teacherDevice, toJid(row.phone, cfg.countryCode), reminderText(row));
-    } catch (err) {
-      console.error(`[reminders] teacher reminder for class ${row.id} failed:`, err.message);
+    if (row.phone) {
+      try {
+        await gowa.sendText(cfg.teacherDevice, toJid(row.phone, cfg.countryCode), reminderText(row));
+      } catch (err) {
+        console.error(`[reminders] teacher reminder for class ${row.id} failed:`, err.message);
+      }
+    }
+    for (const g of (await q(GROUPS_OF_BATCH, [row.batchId])).rows) {
+      await gowa.sendText(cfg.studentDevice, g.studentGroupJid, studentReminderText(row))
+        .catch((err) => console.error(`[reminders] group reminder for class ${row.id} failed:`, err.message));
     }
   }
 }
@@ -59,4 +77,4 @@ function start() {
   if (!cfg.appUrl || !cfg.cronSecret) console.warn('[reminders] APP_URL/CRON_SECRET not set: site reminder emails are not triggered from here');
 }
 
-module.exports = { start, remindTeachers, reminderText };
+module.exports = { start, remindTeachers, reminderText, studentReminderText };

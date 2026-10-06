@@ -16,6 +16,7 @@ const classes = [{ id: 'c1', scheduledAt: new Date(Date.now() + 150 * 60000), ba
 people.pool = {
   query: async (sql, args = []) => {
     if (sql.includes('FROM "Class" c')) return { rows: classes.filter((c) => !c.remindedAt) };
+    if (sql.includes('"studentGroupJid" FROM "BatchStudent"')) return { rows: [{ studentGroupJid: '120363000000000002@g.us' }] };
     if (sql.startsWith('UPDATE "Class"')) {
       const c = classes.find((x) => x.id === args[0] && !x.remindedAt);
       if (c) c.remindedAt = new Date();
@@ -29,10 +30,14 @@ gowa.sendText = async (device, jid, text) => { sent.push({ device, jid, text });
 
 const { remindTeachers, reminderText } = require('../src/reminders');
 
-test('the teacher gets one WhatsApp reminder per class, from the teacher number', async () => {
+test('the teacher and each student group get one WhatsApp reminder per class', async () => {
   await remindTeachers();
   await remindTeachers();
-  assert.equal(sent.length, 1);
+  assert.equal(sent.length, 2);
+  assert.deepEqual([sent[1].device, sent[1].jid], ['student', '120363000000000002@g.us']);
+  assert.match(sent[1].text, /Topic: Quadratic equations/);
+  assert.match(sent[1].text, /join a few minutes early/);
+  assert.doesNotMatch(sent[1].text, /Please prepare/);
   assert.deepEqual([sent[0].device, sent[0].jid], ['teacher', '919934237343@s.whatsapp.net']);
   assert.match(sent[0].text, /VishAkash starts .* IST \(in about 2 h (29|30) min\)/);
   assert.match(sent[0].text, /Topic: Quadratic equations/);
