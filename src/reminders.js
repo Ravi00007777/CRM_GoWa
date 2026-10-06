@@ -1,5 +1,6 @@
 // Class reminders.
-// - Every minute: WhatsApp about each class starting within the next 3 hours: the teacher
+// - Every minute, for batches where admin pressed "Send reminders" on the AlmaEd site:
+//   WhatsApp about each class starting within the next 3 hours: the teacher
 //   directly (from the teacher-facing number), so they can prepare, and every student group of
 //   the batch (from the student-facing number). Each class is claimed before sending, so
 //   everyone gets one reminder per class even across restarts.
@@ -19,7 +20,7 @@ const DUE = `
   FROM "Class" c JOIN "Batch" b ON b.id = c."batchId" JOIN "User" t ON t.id = b."teacherId"
   WHERE c.status = 'SCHEDULED' AND c."teacherWaRemindedAt" IS NULL
     AND c."scheduledAt" > now() AND c."scheduledAt" <= now() + interval '3 hours'
-    AND t."isActive" AND b."archivedAt" IS NULL
+    AND t."isActive" AND b."archivedAt" IS NULL AND b."waReminders" -- admin's "Send reminders" switch
   ORDER BY c."scheduledAt" LIMIT 10`;
 
 const ist = (d) => new Date(d).toLocaleString('en-IN', {

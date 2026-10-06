@@ -55,3 +55,8 @@ test('database timestamps are read as UTC, so a 11:30 UTC class shows as 5:00 pm
   assert.equal(at.toISOString(), '2026-10-06T11:30:00.000Z');
   assert.match(reminderText({ scheduledAt: at, batch: 'B', meetLink: 'x' }, at.getTime() - 3 * 3600e3), /5:00 pm IST \(in about 3 h 0 min\)/);
 });
+
+test('only batches with the "Send reminders" switch on are reminded', () => {
+  const sql = require('fs').readFileSync(require.resolve('../src/reminders'), 'utf8');
+  assert.match(sql, /b\."waReminders"/);
+});
