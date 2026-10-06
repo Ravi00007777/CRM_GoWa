@@ -60,3 +60,10 @@ test('only batches with the "Send reminders" switch on are reminded', () => {
   const sql = require('fs').readFileSync(require.resolve('../src/reminders'), 'utf8');
   assert.match(sql, /b\."waReminders"/);
 });
+
+test('without a teacher number, everything goes from the relay number', () => {
+  const { execFileSync } = require('node:child_process');
+  const env = { ...process.env, TEACHER_DEVICE_ID: '' };
+  const out = execFileSync(process.execPath, ['-e', "process.stdout.write(require('./src/config').teacherDevice)"], { env, cwd: require('node:path').join(__dirname, '..') });
+  assert.equal(String(out), 'student');
+});

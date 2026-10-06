@@ -110,7 +110,8 @@ let deviceUsers = {}; // gowa device id -> JID user part
 async function roleOfDevice(deviceId) {
   const match = () => {
     const u = userPart(deviceId);
-    for (const [role, id] of [['teacher', cfg.teacherDevice], ['student', cfg.studentDevice]]) {
+    // Student first: with a single relay number (no teacher device), its chats are parent chats.
+    for (const [role, id] of [['student', cfg.studentDevice], ['teacher', cfg.teacherDevice]]) {
       if (deviceId === id || (deviceUsers[id] && deviceUsers[id] === u)) return role;
     }
     return null;

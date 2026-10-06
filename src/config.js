@@ -13,7 +13,9 @@ module.exports = {
   databaseUrl: need('DATABASE_URL'),
   gowaUrl: need('GOWA_BASE_URL').replace(/\/$/, ''),
   gowaBasicAuth: need('GOWA_BASIC_AUTH'),
-  teacherDevice: need('TEACHER_DEVICE_ID'),
+  // Optional: without a separate teacher-facing number, teachers are messaged (reminders, admin
+  // alerts) from the relay number too, so only one WhatsApp number is paired.
+  teacherDevice: process.env.TEACHER_DEVICE_ID || need('STUDENT_DEVICE_ID'),
   studentDevice: need('STUDENT_DEVICE_ID'),
   webhookSecret: need('WEBHOOK_SECRET'),
   adminJid: need('ADMIN_WA_JID'),
