@@ -13,6 +13,10 @@ const { toJid } = require('./redact');
 // Supabase's pooled connection needs TLS but presents a certificate for its own host,
 // which node-postgres rejects by default.
 const pool = new Pool({ connectionString: cfg.databaseUrl, ssl: { rejectUnauthorized: false } });
+// An idle connection can drop (the Mac sleeps, Wi-Fi changes: EADDRNOTAVAIL). pg then emits
+// 'error' on the pool, and with no listener Node crashes the whole relay. Log it instead: the
+// pool discards that connection and the next query opens a fresh one.
+pool.on('error', (err) => console.error('[db] idle connection dropped:', err.code ?? err.message));
 
 // A teacher is reachable if they are active and have a phone. A student has their own number
 // (student_jid: what they send lands in the teacher's doubt chat) and optionally a parent's
