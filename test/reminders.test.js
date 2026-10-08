@@ -11,12 +11,12 @@ const assert = require('node:assert/strict');
 const people = require('../src/people');
 const gowa = require('../src/gowa');
 
-const classes = [{ id: 'c1', scheduledAt: new Date(Date.now() + 150 * 60000), batch: 'VishAkash',
-  meetLink: 'https://meet.google.com/abc-defg-hij', topic: 'Quadratic equations', teacher: 'Vishwas', phone: '99342 37343', remindedAt: null }];
+const classes = [{ id: 'c1', scheduledAt: new Date(Date.now() + 28 * 60000), students: 'Akash Verma',
+  meetLink: 'https://meet.google.com/abc-defg-hij', topic: 'Quadratic equations', teacher: 'Vishwas Rao', phone: '99342 37343', remindedAt: null }];
 people.pool = {
   query: async (sql, args = []) => {
     if (sql.includes('FROM "Class" c')) return { rows: classes.filter((c) => !c.remindedAt) };
-    if (sql.includes('"studentGroupJid" FROM "BatchStudent"')) return { rows: [{ studentGroupJid: '120363000000000002@g.us' }] };
+    if (sql.includes('SELECT c."studentGroupJid"')) return { rows: [{ studentGroupJid: '120363000000000002@g.us', student: 'Akash Verma' }] };
     if (sql.startsWith('UPDATE "Class"')) {
       const c = classes.find((x) => x.id === args[0] && !x.remindedAt);
       if (c) c.remindedAt = new Date();
@@ -28,32 +28,40 @@ people.pool = {
 const sent = [];
 gowa.sendText = async (device, jid, text) => { sent.push({ device, jid, text }); };
 
-const { remindTeachers, reminderText } = require('../src/reminders');
+const { remindTeachers, teacherText, studentText } = require('../src/reminders');
 
 test('the teacher and each student group get one WhatsApp reminder per class', async () => {
   await remindTeachers();
   await remindTeachers();
   assert.equal(sent.length, 2);
   assert.deepEqual([sent[1].device, sent[1].jid], ['student', '120363000000000002@g.us']);
+  assert.match(sent[1].text, /^Hi Akash,\nYour class starts in (27|28) min, at .* IST\./);
   assert.match(sent[1].text, /Topic: Quadratic equations/);
+  assert.match(sent[1].text, /Join on Google Meet: https:\/\/meet\.google\.com\/abc-defg-hij/);
   assert.match(sent[1].text, /join a few minutes early/);
-  assert.doesNotMatch(sent[1].text, /Please prepare/);
   assert.deepEqual([sent[0].device, sent[0].jid], ['teacher', '919934237343@s.whatsapp.net']);
-  assert.match(sent[0].text, /VishAkash starts .* IST \(in about 2 h (29|30) min\)/);
+  assert.match(sent[0].text, /^Hi Vishwas,\nYour class with Akash starts in (27|28) min/);
   assert.match(sent[0].text, /Topic: Quadratic equations/);
-  assert.match(sent[0].text, /Please prepare/);
   assert.match(sent[0].text, /meet\.google\.com\/abc-defg-hij/);
 });
 
-test('short lead times read in minutes', () => {
-  assert.match(reminderText({ scheduledAt: new Date(Date.now() + 45 * 60000), batch: 'B', meetLink: 'x' }), /in about (44|45) min/);
+test('reminders go out 30 minutes before, never hours before', () => {
+  const sql = require('fs').readFileSync(require.resolve('../src/reminders'), 'utf8');
+  assert.match(sql, /interval '30 minutes'/);
+});
+
+test('a test reads as a test, and no topic means no topic line', () => {
+  const row = { scheduledAt: new Date(Date.now() + 30 * 60000), meetLink: 'x', students: 'Riya Sen,Aarav Kumar' };
+  assert.match(studentText({ ...row, topic: 'Test: Algebra' }, 'Riya Sen'), /Your test starts.*\nTopic: Algebra\n/);
+  assert.doesNotMatch(studentText({ ...row, topic: null }, 'Riya Sen'), /Topic/);
+  assert.match(teacherText({ ...row, teacher: 'Ravi' }), /with Riya and Aarav starts/);
 });
 
 test('database timestamps are read as UTC, so a 11:30 UTC class shows as 5:00 pm IST', () => {
   const { types } = require('pg');
   const at = types.getTypeParser(types.builtins.TIMESTAMP)('2026-10-06 11:30:00.000');
   assert.equal(at.toISOString(), '2026-10-06T11:30:00.000Z');
-  assert.match(reminderText({ scheduledAt: at, batch: 'B', meetLink: 'x' }, at.getTime() - 3 * 3600e3), /5:00 pm IST \(in about 3 h 0 min\)/);
+  assert.match(studentText({ scheduledAt: at, meetLink: 'x' }, 'A', at.getTime() - 30 * 60e3), /starts in 30 min, at 5:00 pm IST/);
 });
 
 test('only batches with the "Send reminders" switch on are reminded', () => {
