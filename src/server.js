@@ -4,6 +4,7 @@ const { handleWebhook } = require('./relay');
 const groups = require('./groups');
 const outbox = require('./outbox');
 const reminders = require('./reminders');
+const demos = require('./demos');
 
 const app = express();
 
@@ -19,3 +20,5 @@ groups.start();
 outbox.start();
 // WhatsApp class reminders 30 minutes before each class, and the site's reminder emails.
 reminders.start();
+// Demo classes: WhatsApp confirmation when booked, and a reminder 30 minutes before.
+demos.start();
