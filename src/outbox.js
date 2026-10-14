@@ -10,7 +10,7 @@ const path = require('node:path');
 const cfg = require('./config');
 const gowa = require('./gowa');
 const people = require('./people');
-const { redact, mentionsPayment } = require('./redact');
+const { redact, mentionsPayment, toJid } = require('./redact');
 
 const q = (sql, args) => people.pool.query(sql, args);
 
@@ -24,6 +24,21 @@ const PENDING_DOUBTS = `
   WHERE d."waMessageId" IS NULL AND d."senderId" = b."teacherId" AND c."studentGroupJid" IS NOT NULL
     AND b."archivedAt" IS NULL AND NOT c."removeGroup"
   ORDER BY d."createdAt" LIMIT 20`;
+
+// A doubt the website's AI class couldn't answer and posted to the batch's doubt chat for the
+// teacher: the teacher gets a WhatsApp alert, one to one from the teacher number, to answer it on
+// the site. Only the last day's, so an old backlog is never alerted all at once.
+const AI_PREFIX = 'Doubt from the AI class (';
+const PENDING_AI_DOUBTS = `
+  SELECT ai.id, ai.body, ai."studentId", b."teacherId", b.name AS batch, s.name AS student,
+         t.name AS teacher, t.phone AS teacher_phone
+  FROM "DoubtMessage" ai
+  JOIN "Batch" b ON b.id = ai."batchId"
+  JOIN "User" t ON t.id = b."teacherId"
+  JOIN "User" s ON s.id = ai."studentId"
+  WHERE ai."waMessageId" IS NULL AND ai."senderId" = ai."studentId" AND ai.body LIKE '${AI_PREFIX}%'
+    AND ai."createdAt" > now() - interval '1 day' AND b."archivedAt" IS NULL
+  ORDER BY ai."createdAt" LIMIT 10`;
 
 const PENDING_RESOURCES = `
   SELECT r.id, r.title, r.type, r."fileUrl", r."dueAt", b."teacherId", t.name AS teacher
@@ -64,6 +79,27 @@ async function sendDoubt(row) {
   await log(row, body, 'RELAYED', sent?.message_id || null);
 }
 
+const first = (name) => String(name ?? '').trim().split(/\s+/)[0] || '';
+
+function aiDoubtText(row) {
+  const { text } = redact(String(row.body).slice(AI_PREFIX.length).replace(/^.*?\): /, ''));
+  const lesson = String(row.body).slice(AI_PREFIX.length).split('): ')[0];
+  return `Hi ${first(row.teacher)},\n${first(row.student)} (${row.batch}) asked a doubt in the AI class on ${lesson} ` +
+    `that the AI teacher couldn't answer:\n"${text.trim()}"\nPlease reply in the Doubts section on the AlmaEd website.`;
+}
+
+async function alertAiDoubt(row) {
+  if (!(await claim('DoubtMessage', row.id))) return;
+  if (!row.teacher_phone) return mark('DoubtMessage', row.id, `skipped:${row.id}`);
+  const text = aiDoubtText(row);
+  const sent = await gowa.sendText(cfg.teacherDevice, toJid(row.teacher_phone, cfg.countryCode), text);
+  await mark('DoubtMessage', row.id, `alerted:${sent?.message_id || row.id}`);
+  await people.log({
+    teacherId: row.teacherId, studentId: row.studentId, direction: 'STUDENT_TO_TEACHER',
+    waMessageId: null, outMessageId: sent?.message_id || null, content: text, status: 'RELAYED',
+  }).catch((err) => console.error('[outbox] log failed:', err.message));
+}
+
 // Teachers share files as Google Drive links; only older resources are files in AlmaEd's storage.
 const isDriveLink = (url) => /^https:\/\/(?:drive|docs)\.google\.com\//.test(url);
 
@@ -100,6 +136,9 @@ async function flush() {
   for (const row of (await q(PENDING_DOUBTS)).rows) {
     await sendDoubt(row).catch((err) => console.error(`[outbox] doubt ${row.id} failed:`, err.message));
   }
+  for (const row of (await q(PENDING_AI_DOUBTS)).rows) {
+    await alertAiDoubt(row).catch((err) => console.error(`[outbox] AI doubt alert ${row.id} failed:`, err.message));
+  }
   for (const row of (await q(PENDING_RESOURCES)).rows) {
     await sendResource(row).catch((err) => console.error(`[outbox] resource ${row.id} failed:`, err.message));
   }
@@ -115,4 +154,4 @@ function start() {
   }, 5e3).unref();
 }
 
-module.exports = { flush, start };
+module.exports = { flush, start, aiDoubtText };

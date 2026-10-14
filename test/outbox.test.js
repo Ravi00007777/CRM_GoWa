@@ -12,21 +12,23 @@ const people = require('../src/people');
 
 const GROUP = '120363000000000000@g.us';
 let doubts;
+let aiDoubts;
 let logged;
 people.log = async (row) => { logged.push(row); };
 people.pool = {
   query: async (sql, args = []) => {
+    if (sql.includes('FROM "DoubtMessage" ai')) return { rows: aiDoubts.filter((d) => d.waMessageId === null) };
     if (sql.includes('FROM "DoubtMessage" d')) {
       return { rows: doubts.filter((d) => d.waMessageId === null).map((d) => ({ ...d, studentGroupJid: GROUP })) };
     }
     if (sql.includes('FROM "Resource" r JOIN')) return { rows: [] };
     if (sql.startsWith('UPDATE "DoubtMessage"') && sql.includes('IS NULL')) {
-      const d = doubts.find((x) => x.id === args[0] && x.waMessageId === null);
+      const d = [...doubts, ...aiDoubts].find((x) => x.id === args[0] && x.waMessageId === null);
       if (d) d.waMessageId = args[1];
       return { rowCount: d ? 1 : 0 };
     }
     if (sql.startsWith('UPDATE "DoubtMessage"')) {
-      doubts.find((x) => x.id === args[0]).waMessageId = args[1];
+      [...doubts, ...aiDoubts].find((x) => x.id === args[0]).waMessageId = args[1];
       return { rowCount: 1 };
     }
     throw new Error(`unexpected query: ${sql}`);
@@ -43,7 +45,7 @@ const outbox = require('../src/outbox');
 
 const doubt = (id, body) => ({ id, body, imageUrl: null, teacher: 'Vishwas', teacherId: 't1', studentId: 's1', waMessageId: null });
 
-test.beforeEach(() => { doubts = []; logged = []; sent.length = 0; });
+test.beforeEach(() => { doubts = []; aiDoubts = []; logged = []; sent.length = 0; });
 
 test('a teacher message on the site goes to the student group from the student number, once', async () => {
   doubts = [doubt('d1', 'Homework: page 12')];
@@ -110,4 +112,28 @@ test('a Google Drive resource goes to every student group as its link, not a dow
   assert.equal(sent[0].url, 'http://gowa.test/send/message');
   assert.equal(sent[0].body.message, 'Teacher Vishwas - new assignment: Chapter 4\nhttps://drive.google.com/file/d/abc/view');
   assert.equal(resources[0].waMessageId, 'sent:r1');
+});
+
+const aiDoubt = (id, phone = '9876543210') => ({
+  id, body: 'Doubt from the AI class (Fractions (Class 5)): why is 1/3 bigger than 1/5?', studentId: 's1', teacherId: 't1',
+  batch: 'Class 5 Maths', student: 'Riya Sharma', teacher: 'Vishwas Rao', teacher_phone: phone, waMessageId: null,
+});
+
+test('a doubt the AI class could not answer alerts the teacher one to one from the teacher number, once', async () => {
+  aiDoubts = [aiDoubt('a1')];
+  await outbox.flush();
+  await outbox.flush();
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].device, 'teacher');
+  assert.equal(sent[0].body.phone, '919876543210@s.whatsapp.net');
+  assert.match(sent[0].body.message, /^Hi Vishwas,\nRiya \(Class 5 Maths\) asked a doubt in the AI class on Fractions \(Class 5\)/);
+  assert.match(sent[0].body.message, /"why is 1\/3 bigger than 1\/5\?"/);
+  assert.match(aiDoubts[0].waMessageId, /^alerted:/);
+});
+
+test('no teacher phone: the AI doubt is skipped, not retried', async () => {
+  aiDoubts = [aiDoubt('a2', null)];
+  await outbox.flush();
+  assert.equal(sent.length, 0);
+  assert.equal(aiDoubts[0].waMessageId, 'skipped:a2');
 });
