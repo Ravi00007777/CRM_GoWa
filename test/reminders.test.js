@@ -45,9 +45,10 @@ test('the teacher and each student group get one WhatsApp reminder per class', a
   assert.match(sent[0].text, /meet\.google\.com\/abc-defg-hij/);
 });
 
-test('reminders go out 30 minutes before, never hours before', () => {
-  const sql = require('fs').readFileSync(require.resolve('../src/reminders'), 'utf8');
-  assert.match(sql, /interval '30 minutes'/);
+test('reminders go out 30 minutes before (not under 3) and a last call 2 minutes before, never hours before', () => {
+  const src = require('fs').readFileSync(require.resolve('../src/reminders'), 'utf8');
+  assert.match(src, /due\('teacherWaRemindedAt', 3, 30\)/);
+  assert.match(src, /due\('lastCallWaAt', 0, 2\)/);
 });
 
 test('a test reads as a test, and the topic is never sent', () => {
@@ -75,4 +76,11 @@ test('without a teacher number, everything goes from the relay number', () => {
   const env = { ...process.env, TEACHER_DEVICE_ID: '' };
   const out = execFileSync(process.execPath, ['-e', "process.stdout.write(require('./src/config').teacherDevice)"], { env, cwd: require('node:path').join(__dirname, '..') });
   assert.equal(String(out), 'student');
+});
+
+test('the 2-minute last call says join now', () => {
+  const soon = { ...classes[0], scheduledAt: new Date(Date.now() + 2 * 60000) };
+  assert.match(studentText(soon, 'Riya Sen', Date.now(), true), /^Hi Riya,\nYour class starts in 2 min, at .* IST\.\nJoin on Google Meet: https:.*\nPlease join now\./);
+  assert.match(teacherText(soon, Date.now(), true), /starts in 2 min, at .* IST\. Please join now\.\nJoin on Google Meet/);
+  assert.doesNotMatch(teacherText(soon, Date.now(), false), /join now/);
 });
