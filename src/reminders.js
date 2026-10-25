@@ -3,7 +3,7 @@
 //   WhatsApp about each class starting within the next 30 minutes (late on purpose, so admin
 //   can still move or cancel a class, or add an emergency one, before anyone is told): the
 //   teacher directly (from the teacher-facing number), and every student group of the batch
-//   (from the student-facing number), each greeted by name with the topic and Meet link. Each
+//   (from the student-facing number), each greeted by name with the time and Meet link (never the topic). Each
 //   class is claimed before sending, so everyone gets one reminder per class even across restarts.
 // - Every 5 minutes: call the AlmaEd site's reminder job, which emails teacher and students and
 //   rolls weekly classes forward. The relay is always on, unlike GitHub's scheduler, which
@@ -30,15 +30,15 @@ const time = (d) => new Date(d).toLocaleTimeString('en-IN', { timeZone: 'Asia/Ko
 const firstName = (name) => String(name ?? '').trim().split(/\s+/)[0] || '';
 const nameList = (names) => (names.length <= 1 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`);
 
-// The lines both messages share: when, what, and the link. A "Test: ..." topic reads as a test.
+// The lines both messages share: when, what, and the link. A "Test: ..." topic reads as a test, but
+// the topic itself is never sent: the planned topic often changes on the day.
 function details(row, now) {
   const mins = Math.max(1, Math.round((new Date(row.scheduledAt).getTime() - now) / 60000));
   const isTest = /^Test:/.test(row.topic ?? '');
-  const topic = (row.topic ?? '').replace(/^Test:\s*/, '');
   return {
     what: isTest ? 'test' : 'class',
     when: `starts in ${mins} min, at ${time(row.scheduledAt)} IST.`,
-    rest: (topic ? `Topic: ${topic}\n` : '') + `Join on Google Meet: ${row.meetLink}`,
+    rest: `Join on Google Meet: ${row.meetLink}`,
   };
 }
 

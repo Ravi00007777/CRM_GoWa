@@ -36,12 +36,12 @@ test('the teacher and each student group get one WhatsApp reminder per class', a
   assert.equal(sent.length, 2);
   assert.deepEqual([sent[1].device, sent[1].jid], ['student', '120363000000000002@g.us']);
   assert.match(sent[1].text, /^Hi Akash,\nYour class starts in (27|28) min, at .* IST\./);
-  assert.match(sent[1].text, /Topic: Quadratic equations/);
+  assert.doesNotMatch(sent[1].text, /Topic|Quadratic/);
   assert.match(sent[1].text, /Join on Google Meet: https:\/\/meet\.google\.com\/abc-defg-hij/);
   assert.match(sent[1].text, /join a few minutes early/);
   assert.deepEqual([sent[0].device, sent[0].jid], ['teacher', '919934237343@s.whatsapp.net']);
   assert.match(sent[0].text, /^Hi Vishwas,\nYour class with Akash starts in (27|28) min/);
-  assert.match(sent[0].text, /Topic: Quadratic equations/);
+  assert.doesNotMatch(sent[0].text, /Topic|Quadratic/);
   assert.match(sent[0].text, /meet\.google\.com\/abc-defg-hij/);
 });
 
@@ -50,9 +50,10 @@ test('reminders go out 30 minutes before, never hours before', () => {
   assert.match(sql, /interval '30 minutes'/);
 });
 
-test('a test reads as a test, and no topic means no topic line', () => {
+test('a test reads as a test, and the topic is never sent', () => {
   const row = { scheduledAt: new Date(Date.now() + 30 * 60000), meetLink: 'x', students: 'Riya Sen,Aarav Kumar' };
-  assert.match(studentText({ ...row, topic: 'Test: Algebra' }, 'Riya Sen'), /Your test starts.*\nTopic: Algebra\n/);
+  assert.match(studentText({ ...row, topic: 'Test: Algebra' }, 'Riya Sen'), /Your test starts/);
+  assert.doesNotMatch(studentText({ ...row, topic: 'Test: Algebra' }, 'Riya Sen'), /Algebra/);
   assert.doesNotMatch(studentText({ ...row, topic: null }, 'Riya Sen'), /Topic/);
   assert.match(teacherText({ ...row, teacher: 'Ravi' }), /with Riya and Aarav starts/);
 });
