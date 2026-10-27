@@ -4,6 +4,7 @@ const { handleWebhook } = require('./relay');
 const groups = require('./groups');
 const outbox = require('./outbox');
 const reminders = require('./reminders');
+const parentUpdates = require('./parent-updates');
 const demos = require('./demos');
 
 const app = express();
@@ -20,5 +21,7 @@ groups.start();
 outbox.start();
 // WhatsApp class reminders 30 minutes before each class, and the site's reminder emails.
 reminders.start();
+// Weekly parent updates a mentor approved on the AlmaEd site, to the student groups.
+parentUpdates.start();
 // Demo classes: WhatsApp confirmation when booked, and a reminder 30 minutes before.
 demos.start();
