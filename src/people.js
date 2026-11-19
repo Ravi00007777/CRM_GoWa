@@ -11,8 +11,10 @@ const cfg = require('./config');
 const { toJid } = require('./redact');
 
 // Supabase's pooled connection needs TLS but presents a certificate for its own host,
-// which node-postgres rejects by default.
-const pool = new Pool({ connectionString: cfg.databaseUrl, ssl: { rejectUnauthorized: false } });
+// which node-postgres rejects by default. keepAlive and the timeouts: a connection left dead by a
+// network change fails in seconds instead of hanging for minutes, so the next reminder pass
+// (every minute) gets a fresh one and the 2-minute last call isn't missed.
+const pool = new Pool({ connectionString: cfg.databaseUrl, ssl: { rejectUnauthorized: false }, keepAlive: true, connectionTimeoutMillis: 10000, query_timeout: 20000 });
 // An idle connection can drop (the Mac sleeps, Wi-Fi changes: EADDRNOTAVAIL). pg then emits
 // 'error' on the pool, and with no listener Node crashes the whole relay. Log it instead: the
 // pool discards that connection and the next query opens a fresh one.
